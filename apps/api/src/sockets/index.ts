@@ -34,6 +34,7 @@ import { assertParticipant, isBlockedEither } from "../services/conversations.js
 import { createCall, endCall, getCall, setCallStatus } from "../services/calls.js";
 import {
   createLivekitToken,
+  ensureLivekitRoom,
   getLivekitUrl,
   livekitConfigured,
 } from "../services/livekit.js";
@@ -322,14 +323,18 @@ export function createSocketServer(
           video: Boolean(payload.video),
         });
 
-        io.to(`user:${other.userId}`).emit(SOCKET_EVENTS.CALL_OFFER, {
+        const offer = {
           callId: call.callId,
           conversationId: payload.conversationId,
           fromUserId: userId,
           fromName: me?.user.name ?? "Usuário",
           video: call.video,
           livekitUrl: getLivekitUrl(),
-        });
+        };
+
+        io.to(`user:${other.userId}`).emit(SOCKET_EVENTS.CALL_OFFER, offer);
+        // Caller also gets callId for cancel/hangup
+        socket.emit(SOCKET_EVENTS.CALL_OFFER, offer);
       } catch (err) {
         socket.emit(SOCKET_EVENTS.ERROR, {
           event: SOCKET_EVENTS.CALL_INVITE,
@@ -368,6 +373,8 @@ export function createSocketServer(
             statusCode: 503,
           });
         }
+
+        await ensureLivekitRoom(call.roomName);
 
         const [callerToken, calleeToken] = await Promise.all([
           createLivekitToken({

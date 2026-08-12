@@ -1,7 +1,11 @@
-import { AccessToken } from "livekit-server-sdk";
+import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
 import { config, livekitConfigured } from "../config.js";
 
 export { livekitConfigured };
+
+function livekitHttpUrl(wsUrl: string) {
+  return wsUrl.replace(/^ws/, "http");
+}
 
 export async function createLivekitToken(input: {
   roomName: string;
@@ -13,7 +17,10 @@ export async function createLivekitToken(input: {
     throw new Error("LiveKit is not configured");
   }
 
-  const at = new AccessToken(config.livekit.apiKey, config.livekit.apiSecret, {
+  const apiKey = config.livekit.apiKey.trim();
+  const apiSecret = config.livekit.apiSecret.trim();
+
+  const at = new AccessToken(apiKey, apiSecret, {
     identity: input.identity,
     name: input.name,
     ttl: input.ttlSeconds ?? 60 * 60,
@@ -27,9 +34,33 @@ export async function createLivekitToken(input: {
     canPublishData: true,
   });
 
-  return at.toJwt();
+  const token = await at.toJwt();
+  if (typeof token !== "string" || token.length < 20) {
+    throw new Error("Falha ao gerar token LiveKit");
+  }
+  return token;
+}
+
+export async function ensureLivekitRoom(roomName: string) {
+  if (!livekitConfigured()) return;
+  const url = config.livekit.url.trim();
+  const svc = new RoomServiceClient(
+    livekitHttpUrl(url),
+    config.livekit.apiKey.trim(),
+    config.livekit.apiSecret.trim(),
+  );
+  try {
+    await svc.createRoom({
+      name: roomName,
+      maxParticipants: 4,
+      emptyTimeout: 60 * 10,
+    });
+  } catch {
+    // room may already exist
+  }
 }
 
 export function getLivekitUrl() {
-  return config.livekit.url || null;
+  const url = config.livekit.url.trim();
+  return url || null;
 }
