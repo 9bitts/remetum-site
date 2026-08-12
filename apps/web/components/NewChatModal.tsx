@@ -14,11 +14,12 @@ export function NewChatModal({
   onClose: () => void;
   onCreated: (conversation: ConversationSummary) => void;
 }) {
-  const [tab, setTab] = useState<"direct" | "group">("direct");
+  const [tab, setTab] = useState<"direct" | "group" | "invite">("direct");
   const [query, setQuery] = useState("");
   const [users, setUsers] = useState<PublicUser[]>([]);
   const [selected, setSelected] = useState<PublicUser[]>([]);
   const [groupName, setGroupName] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -127,7 +128,56 @@ export function NewChatModal({
           >
             Grupo
           </button>
+          <button
+            type="button"
+            onClick={() => setTab("invite")}
+            className={`rounded-xl px-3 py-1.5 text-sm ${
+              tab === "invite"
+                ? "bg-ebano-accent text-ebano-bg"
+                : "bg-ebano-bg text-ebano-muted"
+            }`}
+          >
+            Convite
+          </button>
         </div>
+
+        {tab === "invite" ? (
+          <div className="space-y-3">
+            <input
+              value={inviteCode}
+              onChange={(e) => setInviteCode(e.target.value)}
+              placeholder="Código do grupo"
+              className="w-full rounded-xl border border-white/10 bg-ebano-bg px-3 py-2 outline-none focus:border-ebano-accent"
+            />
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => {
+                void (async () => {
+                  setLoading(true);
+                  setError(null);
+                  try {
+                    const res = await api<{ conversation: ConversationSummary }>(
+                      "/conversations/join",
+                      { body: { inviteCode } },
+                    );
+                    onCreated(res.conversation);
+                    onClose();
+                  } catch (err) {
+                    setError(
+                      err instanceof Error ? err.message : "Convite inválido",
+                    );
+                  } finally {
+                    setLoading(false);
+                  }
+                })();
+              }}
+              className="w-full rounded-xl bg-ebano-accent py-2.5 font-medium text-ebano-bg disabled:opacity-60"
+            >
+              Entrar no grupo
+            </button>
+          </div>
+        ) : null}
 
         {tab === "group" ? (
           <input
@@ -138,42 +188,52 @@ export function NewChatModal({
           />
         ) : null}
 
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Buscar por nome ou e-mail"
-          className="mb-3 w-full rounded-xl border border-white/10 bg-ebano-bg px-3 py-2 outline-none focus:border-ebano-accent"
-        />
-
-        <div className="max-h-64 space-y-1 overflow-y-auto">
-          {users.map((user) => {
-            const active = selected.some((u) => u.id === user.id);
-            return (
-              <button
-                key={user.id}
-                type="button"
-                disabled={loading}
-                onClick={() =>
-                  tab === "direct" ? void createDirect(user) : toggleUser(user)
-                }
-                className={`flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left hover:bg-white/5 ${
-                  active ? "bg-white/5" : ""
-                }`}
-              >
-                <Avatar name={user.name} url={user.avatarUrl} online={user.status === "online"} size="sm" />
-                <div>
-                  <p className="text-sm font-medium">{user.name}</p>
-                  <p className="text-xs text-ebano-muted">{user.bio || "Sem bio"}</p>
-                </div>
-              </button>
-            );
-          })}
-          {query.trim().length >= 2 && users.length === 0 ? (
-            <p className="px-2 py-6 text-center text-sm text-ebano-muted">
-              Nenhum usuário encontrado
-            </p>
-          ) : null}
-        </div>
+        {tab !== "invite" ? (
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Buscar por nome ou e-mail"
+            className="mb-3 w-full rounded-xl border border-white/10 bg-ebano-bg px-3 py-2 outline-none focus:border-ebano-accent"
+          />
+        ) : null}
+        {tab !== "invite" ? (
+          <div className="max-h-64 space-y-1 overflow-y-auto">
+            {users.map((user) => {
+              const active = selected.some((u) => u.id === user.id);
+              return (
+                <button
+                  key={user.id}
+                  type="button"
+                  disabled={loading}
+                  onClick={() =>
+                    tab === "direct" ? void createDirect(user) : toggleUser(user)
+                  }
+                  className={`flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left hover:bg-white/5 ${
+                    active ? "bg-white/5" : ""
+                  }`}
+                >
+                  <Avatar
+                    name={user.name}
+                    url={user.avatarUrl}
+                    online={user.status === "online"}
+                    size="sm"
+                  />
+                  <div>
+                    <p className="text-sm font-medium">{user.name}</p>
+                    <p className="text-xs text-ebano-muted">
+                      {user.bio || "Sem bio"}
+                    </p>
+                  </div>
+                </button>
+              );
+            })}
+            {query.trim().length >= 2 && users.length === 0 ? (
+              <p className="px-2 py-6 text-center text-sm text-ebano-muted">
+                Nenhum usuário encontrado
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
         {error ? (
           <p className="mt-3 text-sm text-red-300">{error}</p>

@@ -1,6 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { toAuthUser, toPublicUser } from "../lib/serialize.js";
+import {
+  blockUser,
+  listBlocked,
+  unblockUser,
+} from "../services/status.js";
 
 export async function userRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { q?: string } }>(
@@ -9,6 +14,18 @@ export async function userRoutes(app: FastifyInstance) {
     async (request) => {
       const q = (request.query.q ?? "").trim();
       if (q.length < 2) return { users: [] };
+
+      const blocked = await prisma.userBlock.findMany({
+        where: {
+          OR: [
+            { blockerId: request.userId! },
+            { blockedId: request.userId! },
+          ],
+        },
+      });
+      const blockedIds = new Set(
+        blocked.flatMap((b) => [b.blockerId, b.blockedId]),
+      );
 
       const users = await prisma.user.findMany({
         where: {
@@ -22,7 +39,11 @@ export async function userRoutes(app: FastifyInstance) {
         orderBy: { name: "asc" },
       });
 
-      return { users: users.map(toPublicUser) };
+      return {
+        users: users
+          .filter((u) => !blockedIds.has(u.id))
+          .map(toPublicUser),
+      };
     },
   );
 
@@ -45,4 +66,38 @@ export async function userRoutes(app: FastifyInstance) {
 
     return { user: toAuthUser(user) };
   });
+
+  app.get("/users/blocked", { preHandler: [app.authenticate] }, async (request) => {
+    const users = await listBlocked(request.userId!);
+    return { users };
+  });
+
+  app.post<{ Body: { userId?: string } }>(
+    "/users/block",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      try {
+        if (!request.body?.userId) {
+          return reply.code(400).send({ error: "userId obrigatório" });
+        }
+        await blockUser(request.userId!, request.body.userId);
+        return { ok: true };
+      } catch (err) {
+        const e = err as { statusCode?: number; message: string };
+        return reply.code(e.statusCode ?? 500).send({ error: e.message });
+      }
+    },
+  );
+
+  app.post<{ Body: { userId?: string } }>(
+    "/users/unblock",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      if (!request.body?.userId) {
+        return reply.code(400).send({ error: "userId obrigatório" });
+      }
+      await unblockUser(request.userId!, request.body.userId);
+      return { ok: true };
+    },
+  );
 }

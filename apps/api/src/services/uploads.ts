@@ -28,7 +28,7 @@ export async function storeUpload(input: {
     });
   }
   if (input.buffer.byteLength > config.upload.maxBytes) {
-    throw Object.assign(new Error("Arquivo muito grande (máx. 10MB)"), {
+    throw Object.assign(new Error("Arquivo muito grande (máx. 25MB)"), {
       statusCode: 400,
     });
   }
@@ -74,6 +74,20 @@ function mimeToExt(mime: string) {
       return ".webp";
     case "image/gif":
       return ".gif";
+    case "audio/webm":
+      return ".webm";
+    case "audio/ogg":
+      return ".ogg";
+    case "audio/mpeg":
+      return ".mp3";
+    case "audio/mp4":
+      return ".m4a";
+    case "audio/wav":
+      return ".wav";
+    case "video/mp4":
+      return ".mp4";
+    case "video/webm":
+      return ".webm";
     case "application/pdf":
       return ".pdf";
     case "application/zip":

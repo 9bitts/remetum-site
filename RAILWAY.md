@@ -12,7 +12,7 @@ Isso cria `DATABASE_URL` automaticamente (adicione a variável ao serviço `@eba
 - Root Directory: *(vazio / raiz do repo)*
 - Build: `npm run build --workspace=@ebano/api`
 - Start: `npm run start --workspace=@ebano/api`
-- Release / Deploy command (opcional, mas recomendado):  
+- Release / Deploy command (recomendado):  
   `npm run db:push --workspace=@ebano/api`
 
 Variáveis:
@@ -21,10 +21,12 @@ Variáveis:
 DATABASE_URL=${{Postgres.DATABASE_URL}}
 JWT_SECRET=<aleatório-longo>
 JWT_REFRESH_SECRET=<outro-aleatório-longo>
-CORS_ORIGIN=https://<domínio-do-web>
-PUBLIC_API_URL=https://<domínio-da-api>
+CORS_ORIGIN=https://remetum.com,https://www.remetum.com
+PUBLIC_API_URL=https://api.remetum.com
 PORT=4000
 ```
+
+Domínio customizado da API: `api.remetum.com` (não use o apex no serviço da API).
 
 ## 3) Serviço Web (`@ebano/web`)
 
@@ -35,16 +37,22 @@ PORT=4000
 Variáveis:
 
 ```
-NEXT_PUBLIC_API_URL=https://<domínio-da-api>
+NEXT_PUBLIC_API_URL=https://api.remetum.com
 ```
 
-## 4) Domínios
+Domínios do web: `remetum.com` e `www.remetum.com`.
 
-- Gere domínio público nos dois serviços (Settings → Networking / Domains).
-- Ajuste `CORS_ORIGIN`, `PUBLIC_API_URL` e `NEXT_PUBLIC_API_URL` para esses URLs.
-- Redeploy o **web** depois de setar `NEXT_PUBLIC_API_URL` (é bakeado no build).
+## 4) DNS / Cloudflare
+
+| Host | Aponta para |
+|------|-------------|
+| `remetum.com` / `www` | serviço **web** no Railway |
+| `api.remetum.com` | serviço **api** no Railway |
+
+Depois de setar `NEXT_PUBLIC_API_URL`, faça **redeploy do web** (a variável entra no build).
+
+Se a API estiver atrás do proxy Cloudflare, desative o proxy (DNS only / cinza) no registro `api` se cookies/WebSocket falharem, ou configure WebSockets + SSL Full.
 
 ## Observação
 
-Os packages internos ainda se chamam `@ebano/*` (nome técnico do monorepo).  
-A marca no produto é **Remetum**.
+Os packages internos ainda se chamam `@ebano/*`. A marca no produto é **Remetum**.

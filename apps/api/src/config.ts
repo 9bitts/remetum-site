@@ -1,7 +1,23 @@
+function parseCorsOrigins(raw: string) {
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+const defaultOrigins = [
+  "http://localhost:3000",
+  "https://remetum.com",
+  "https://www.remetum.com",
+];
+
 export const config = {
   port: Number(process.env.PORT ?? 4000),
-  corsOrigin: process.env.CORS_ORIGIN ?? "http://localhost:3000",
-  publicApiUrl: process.env.PUBLIC_API_URL ?? "http://localhost:4000",
+  corsOrigins: parseCorsOrigins(
+    process.env.CORS_ORIGIN ?? defaultOrigins.join(","),
+  ),
+  publicApiUrl:
+    process.env.PUBLIC_API_URL ?? "http://localhost:4000",
   jwtSecret: process.env.JWT_SECRET ?? "dev-jwt-secret-change-me",
   jwtRefreshSecret:
     process.env.JWT_REFRESH_SECRET ?? "dev-refresh-secret-change-me",
@@ -15,12 +31,19 @@ export const config = {
     path: "/",
   },
   upload: {
-    maxBytes: 10 * 1024 * 1024,
+    maxBytes: 25 * 1024 * 1024,
     allowedMime: [
       "image/jpeg",
       "image/png",
       "image/webp",
       "image/gif",
+      "audio/webm",
+      "audio/ogg",
+      "audio/mpeg",
+      "audio/mp4",
+      "audio/wav",
+      "video/mp4",
+      "video/webm",
       "application/pdf",
       "text/plain",
       "application/zip",
@@ -36,7 +59,7 @@ export const config = {
   vapid: {
     publicKey: process.env.VAPID_PUBLIC_KEY ?? "",
     privateKey: process.env.VAPID_PRIVATE_KEY ?? "",
-    subject: process.env.VAPID_SUBJECT ?? "mailto:hello@ebano.app",
+    subject: process.env.VAPID_SUBJECT ?? "mailto:hello@remetum.com",
   },
 };
 

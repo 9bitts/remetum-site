@@ -2,6 +2,9 @@ import type { Server as HttpServer } from "node:http";
 import { Server, type Socket } from "socket.io";
 import {
   SOCKET_EVENTS,
+  type MessageDeletePayload,
+  type MessageEditPayload,
+  type MessageReactPayload,
   type MessageReadPayload,
   type MessageSendPayload,
   type TypingPayload,
@@ -9,7 +12,14 @@ import {
 import { config } from "../config.js";
 import { verifyAccessToken } from "../services/tokens.js";
 import { prisma } from "../prisma.js";
-import { createMessage, markMessagesRead } from "../services/messages.js";
+import {
+  createMessage,
+  deleteMessageForEveryone,
+  editMessage,
+  markDeliveredForUser,
+  markMessagesRead,
+  toggleReaction,
+} from "../services/messages.js";
 import {
   getContactUserIds,
   setUserOffline,
@@ -18,7 +28,7 @@ import {
   untrackSocket,
 } from "../services/presence.js";
 import { notifyUsers } from "../services/push.js";
-import { markDeliveredForUser } from "../services/messages.js";
+import { setIo } from "./io.js";
 
 function parseCookies(header?: string) {
   const out: Record<string, string> = {};
@@ -39,10 +49,13 @@ async function authenticateSocket(socket: Socket) {
   return payload.sub;
 }
 
-export function createSocketServer(httpServer: HttpServer, corsOrigin: string) {
+export function createSocketServer(
+  httpServer: HttpServer,
+  corsOrigins: string | string[],
+) {
   const io = new Server(httpServer, {
     cors: {
-      origin: corsOrigin,
+      origin: corsOrigins,
       credentials: true,
     },
   });
@@ -56,6 +69,8 @@ export function createSocketServer(httpServer: HttpServer, corsOrigin: string) {
       next(new Error("Unauthorized"));
     }
   });
+
+  setIo(io);
 
   io.on("connection", async (socket) => {
     const userId = socket.data.userId as string;
@@ -84,7 +99,10 @@ export function createSocketServer(httpServer: HttpServer, corsOrigin: string) {
 
     const pending = await prisma.messageStatus.findMany({
       where: { userId, status: "sent" },
-      select: { messageId: true, message: { select: { conversationId: true, senderId: true } } },
+      select: {
+        messageId: true,
+        message: { select: { conversationId: true, senderId: true } },
+      },
       take: 200,
     });
     if (pending.length > 0) {
@@ -112,6 +130,8 @@ export function createSocketServer(httpServer: HttpServer, corsOrigin: string) {
           content: payload.content,
           type: payload.type,
           mediaUrl: payload.mediaUrl,
+          durationMs: payload.durationMs,
+          replyToId: payload.replyToId,
         });
 
         socket.emit(SOCKET_EVENTS.MESSAGE_SENT, {
@@ -122,16 +142,14 @@ export function createSocketServer(httpServer: HttpServer, corsOrigin: string) {
 
         io.to(`conversation:${payload.conversationId}`).emit(
           SOCKET_EVENTS.MESSAGE_NEW,
-          {
-            message,
-            clientTempId: payload.clientTempId,
-          },
+          { message, clientTempId: payload.clientTempId },
         );
 
         const recipients = await prisma.conversationParticipant.findMany({
           where: {
             conversationId: payload.conversationId,
             userId: { not: userId },
+            OR: [{ mutedUntil: null }, { mutedUntil: { lt: new Date() } }],
           },
           select: { userId: true },
         });
@@ -141,7 +159,11 @@ export function createSocketServer(httpServer: HttpServer, corsOrigin: string) {
             ? (payload.content ?? "").slice(0, 120)
             : payload.type === "image"
               ? "📷 Imagem"
-              : "📎 Arquivo";
+              : payload.type === "audio"
+                ? "🎤 Áudio"
+                : payload.type === "video"
+                  ? "🎬 Vídeo"
+                  : "📎 Arquivo";
 
         await notifyUsers(
           recipients.map((r) => r.userId),
@@ -154,6 +176,65 @@ export function createSocketServer(httpServer: HttpServer, corsOrigin: string) {
       } catch (err) {
         socket.emit(SOCKET_EVENTS.ERROR, {
           event: SOCKET_EVENTS.MESSAGE_SEND,
+          message: (err as Error).message,
+        });
+      }
+    });
+
+    socket.on(SOCKET_EVENTS.MESSAGE_EDIT, async (payload: MessageEditPayload) => {
+      try {
+        const message = await editMessage(
+          payload.messageId,
+          userId,
+          payload.content,
+        );
+        io.to(`conversation:${message.conversationId}`).emit(
+          SOCKET_EVENTS.MESSAGE_UPDATED,
+          { message },
+        );
+      } catch (err) {
+        socket.emit(SOCKET_EVENTS.ERROR, {
+          event: SOCKET_EVENTS.MESSAGE_EDIT,
+          message: (err as Error).message,
+        });
+      }
+    });
+
+    socket.on(
+      SOCKET_EVENTS.MESSAGE_DELETE,
+      async (payload: MessageDeletePayload) => {
+        try {
+          const message = await deleteMessageForEveryone(
+            payload.messageId,
+            userId,
+          );
+          io.to(`conversation:${message.conversationId}`).emit(
+            SOCKET_EVENTS.MESSAGE_UPDATED,
+            { message },
+          );
+        } catch (err) {
+          socket.emit(SOCKET_EVENTS.ERROR, {
+            event: SOCKET_EVENTS.MESSAGE_DELETE,
+            message: (err as Error).message,
+          });
+        }
+      },
+    );
+
+    socket.on(SOCKET_EVENTS.MESSAGE_REACT, async (payload: MessageReactPayload) => {
+      try {
+        const message = await toggleReaction(
+          payload.messageId,
+          userId,
+          payload.emoji,
+        );
+        io.to(`conversation:${message.conversationId}`).emit(
+          SOCKET_EVENTS.MESSAGE_UPDATED,
+          { message },
+        );
+      } catch (err) {
+        socket.emit(SOCKET_EVENTS.ERROR, {
+          event: SOCKET_EVENTS.MESSAGE_REACT,
           message: (err as Error).message,
         });
       }

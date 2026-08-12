@@ -1,26 +1,57 @@
 import type { FastifyInstance } from "fastify";
+import { SOCKET_EVENTS } from "@ebano/shared";
 import {
   createGroupConversation,
   getConversationSummary,
   getOrCreateDirectConversation,
+  joinByInviteCode,
   listConversationsForUser,
   listMessages,
   searchMessages,
+  updateConversationPrefs,
 } from "../services/conversations.js";
+import { getIo } from "../sockets/io.js";
+import { prisma } from "../prisma.js";
 
 type ErrLike = { statusCode?: number; message: string };
 
-function sendError(reply: { code: (n: number) => { send: (b: unknown) => unknown } }, err: unknown) {
+function sendError(
+  reply: { code: (n: number) => { send: (b: unknown) => unknown } },
+  err: unknown,
+) {
   const e = err as ErrLike;
   return reply.code(e.statusCode ?? 500).send({ error: e.message || "Erro interno" });
 }
 
+async function notifyConversationMembers(
+  conversationId: string,
+  reason: "created" | "joined" | "prefs",
+  exceptUserId?: string,
+) {
+  const io = getIo();
+  if (!io) return;
+  const members = await prisma.conversationParticipant.findMany({
+    where: { conversationId },
+    select: { userId: true },
+  });
+  for (const m of members) {
+    if (exceptUserId && m.userId === exceptUserId) continue;
+    io.to(`user:${m.userId}`).emit(SOCKET_EVENTS.CONVERSATION_UPDATED, {
+      conversationId,
+      reason,
+    });
+  }
+}
+
 export async function conversationRoutes(app: FastifyInstance) {
-  app.get(
+  app.get<{ Querystring: { archived?: string } }>(
     "/conversations",
     { preHandler: [app.authenticate] },
     async (request) => {
-      const conversations = await listConversationsForUser(request.userId!);
+      const archived = request.query.archived === "1";
+      const conversations = await listConversationsForUser(request.userId!, {
+        archived,
+      });
       return { conversations };
     },
   );
@@ -57,6 +88,27 @@ export async function conversationRoutes(app: FastifyInstance) {
     },
   );
 
+  app.patch<{
+    Params: { id: string };
+    Body: {
+      pinned?: boolean;
+      archived?: boolean;
+      muted?: boolean;
+      clearChat?: boolean;
+    };
+  }>("/conversations/:id/prefs", { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const conversation = await updateConversationPrefs(
+        request.params.id,
+        request.userId!,
+        request.body ?? {},
+      );
+      return { conversation };
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
+
   app.post<{ Body: { userId?: string } }>(
     "/conversations/direct",
     { preHandler: [app.authenticate] },
@@ -74,6 +126,7 @@ export async function conversationRoutes(app: FastifyInstance) {
           created.id,
           request.userId!,
         );
+        await notifyConversationMembers(created.id, "created", request.userId!);
         return { conversation };
       } catch (err) {
         return sendError(reply, err);
@@ -97,7 +150,30 @@ export async function conversationRoutes(app: FastifyInstance) {
           created.id,
           request.userId!,
         );
+        await notifyConversationMembers(created.id, "created", request.userId!);
         return reply.code(201).send({ conversation });
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  app.post<{ Body: { inviteCode?: string } }>(
+    "/conversations/join",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      try {
+        const code = request.body?.inviteCode?.trim();
+        if (!code) {
+          return reply.code(400).send({ error: "inviteCode obrigatório" });
+        }
+        const created = await joinByInviteCode(request.userId!, code);
+        const conversation = await getConversationSummary(
+          created.id,
+          request.userId!,
+        );
+        await notifyConversationMembers(created.id, "joined");
+        return { conversation };
       } catch (err) {
         return sendError(reply, err);
       }

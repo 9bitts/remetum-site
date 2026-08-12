@@ -27,7 +27,13 @@ export async function uploadRoutes(app: FastifyInstance) {
         return {
           url: stored.url,
           mimeType: stored.mimeType,
-          type: stored.mimeType.startsWith("image/") ? "image" : "file",
+          type: stored.mimeType.startsWith("image/")
+            ? "image"
+            : stored.mimeType.startsWith("audio/")
+              ? "audio"
+              : stored.mimeType.startsWith("video/")
+                ? "video"
+                : "file",
         };
       } catch (err) {
         const e = err as { statusCode?: number; message: string };

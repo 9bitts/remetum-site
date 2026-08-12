@@ -3,7 +3,11 @@ export interface ConversationSummary {
   type: "direct" | "group";
   name: string | null;
   avatarUrl: string | null;
+  inviteCode: string | null;
   createdAt: string;
+  pinnedAt: string | null;
+  archivedAt: string | null;
+  mutedUntil: string | null;
   participants: Array<{
     id: string;
     name: string;
@@ -16,13 +20,22 @@ export interface ConversationSummary {
     id: string;
     conversationId: string;
     senderId: string;
+    replyToId: string | null;
+    replyTo: {
+      id: string;
+      senderId: string;
+      content: string | null;
+      type: "text" | "image" | "file" | "audio" | "video";
+    } | null;
     content: string | null;
-    type: "text" | "image" | "file";
+    type: "text" | "image" | "file" | "audio" | "video";
     mediaUrl: string | null;
+    durationMs: number | null;
     createdAt: string;
     editedAt: string | null;
     deletedAt: string | null;
     status?: "sent" | "delivered" | "read";
+    reactions: Array<{ emoji: string; count: number; reactedByMe: boolean }>;
   } | null;
   unreadCount: number;
 }
@@ -47,4 +60,18 @@ export interface UpdateProfileInput {
   name?: string;
   bio?: string | null;
   avatarUrl?: string | null;
+}
+
+export interface StatusItem {
+  id: string;
+  userId: string;
+  userName: string;
+  userAvatarUrl: string | null;
+  type: "text" | "image" | "file" | "audio" | "video";
+  content: string | null;
+  mediaUrl: string | null;
+  createdAt: string;
+  expiresAt: string;
+  viewedByMe: boolean;
+  viewCount: number;
 }

@@ -15,13 +15,17 @@ type ApiOptions = {
 };
 
 export async function api<T>(path: string, options: ApiOptions = {}): Promise<T> {
+  const method =
+    options.method ?? (options.body !== undefined ? "POST" : "GET");
   const res = await fetch(`${API_URL}${path}`, {
-    method: options.method ?? (options.body ? "POST" : "GET"),
+    method,
     credentials: "include",
-    headers: options.body
-      ? { "Content-Type": "application/json" }
-      : undefined,
-    body: options.body ? JSON.stringify(options.body) : undefined,
+    headers:
+      options.body !== undefined
+        ? { "Content-Type": "application/json" }
+        : undefined,
+    body:
+      options.body !== undefined ? JSON.stringify(options.body) : undefined,
   });
 
   const data = (await res.json().catch(() => ({}))) as {

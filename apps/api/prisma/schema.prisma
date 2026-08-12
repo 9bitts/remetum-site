@@ -26,6 +26,8 @@ enum MessageType {
   text
   image
   file
+  audio
+  video
 }
 
 enum DeliveryStatus {
@@ -35,30 +37,36 @@ enum DeliveryStatus {
 }
 
 model User {
-  id           String    @id @default(cuid())
+  id           String     @id @default(cuid())
   name         String
-  email        String    @unique
-  passwordHash String    @map("password_hash")
-  avatarUrl    String?   @map("avatar_url")
+  email        String     @unique
+  passwordHash String     @map("password_hash")
+  avatarUrl    String?    @map("avatar_url")
   bio          String?
   status       UserStatus @default(offline)
-  lastSeenAt   DateTime? @map("last_seen_at")
-  createdAt    DateTime  @default(now()) @map("created_at")
+  lastSeenAt   DateTime?  @map("last_seen_at")
+  createdAt    DateTime   @default(now()) @map("created_at")
 
-  participants   ConversationParticipant[]
-  messages       Message[]
-  messageStatuses MessageStatus[]
+  participants      ConversationParticipant[]
+  messages          Message[]
+  messageStatuses    MessageStatus[]
   pushSubscriptions PushSubscription[]
+  reactions         MessageReaction[]
+  statuses          StatusPost[]
+  statusViews       StatusView[]
+  blocksInitiated   UserBlock[]               @relation("BlocksInitiated")
+  blocksReceived    UserBlock[]               @relation("BlocksReceived")
 
   @@map("users")
 }
 
 model Conversation {
-  id        String           @id @default(cuid())
-  type      ConversationType
-  name      String?
-  avatarUrl String?          @map("avatar_url")
-  createdAt DateTime         @default(now()) @map("created_at")
+  id         String           @id @default(cuid())
+  type       ConversationType
+  name       String?
+  avatarUrl  String?          @map("avatar_url")
+  inviteCode String?          @unique @map("invite_code")
+  createdAt  DateTime         @default(now()) @map("created_at")
 
   participants ConversationParticipant[]
   messages     Message[]
@@ -71,6 +79,10 @@ model ConversationParticipant {
   userId         String          @map("user_id")
   role           ParticipantRole @default(member)
   joinedAt       DateTime        @default(now()) @map("joined_at")
+  pinnedAt       DateTime?       @map("pinned_at")
+  archivedAt     DateTime?       @map("archived_at")
+  mutedUntil     DateTime?       @map("muted_until")
+  deletedForMeAt DateTime?       @map("deleted_for_me_at")
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -83,16 +95,21 @@ model Message {
   id             String      @id @default(cuid())
   conversationId String      @map("conversation_id")
   senderId       String      @map("sender_id")
+  replyToId      String?     @map("reply_to_id")
   content        String?
   type           MessageType @default(text)
   mediaUrl       String?     @map("media_url")
+  durationMs     Int?        @map("duration_ms")
   createdAt      DateTime    @default(now()) @map("created_at")
   editedAt       DateTime?   @map("edited_at")
   deletedAt      DateTime?   @map("deleted_at")
 
-  conversation Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  sender       User            @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  conversation Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User             @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  replyTo      Message?         @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies      Message[]        @relation("MessageReplies")
   statuses     MessageStatus[]
+  reactions    MessageReaction[]
 
   @@index([conversationId, createdAt])
   @@map("messages")
@@ -109,6 +126,60 @@ model MessageStatus {
 
   @@id([messageId, userId])
   @@map("message_statuses")
+}
+
+model MessageReaction {
+  messageId String   @map("message_id")
+  userId    String   @map("user_id")
+  emoji     String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([messageId, userId, emoji])
+  @@index([messageId])
+  @@map("message_reactions")
+}
+
+model UserBlock {
+  blockerId String   @map("blocker_id")
+  blockedId String   @map("blocked_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  blocker User @relation("BlocksInitiated", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked User @relation("BlocksReceived", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@id([blockerId, blockedId])
+  @@map("user_blocks")
+}
+
+model StatusPost {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  type      MessageType @default(text)
+  content   String?
+  mediaUrl  String?  @map("media_url")
+  createdAt DateTime @default(now()) @map("created_at")
+  expiresAt DateTime @map("expires_at")
+
+  user  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  views StatusView[]
+
+  @@index([userId, expiresAt])
+  @@map("status_posts")
+}
+
+model StatusView {
+  statusId  String   @map("status_id")
+  viewerId  String   @map("viewer_id")
+  viewedAt  DateTime @default(now()) @map("viewed_at")
+
+  status StatusPost @relation(fields: [statusId], references: [id], onDelete: Cascade)
+  viewer User       @relation(fields: [viewerId], references: [id], onDelete: Cascade)
+
+  @@id([statusId, viewerId])
+  @@map("status_views")
 }
 
 model PushSubscription {

@@ -7,6 +7,8 @@ import {
   type Message,
   type MessageNewEvent,
   type MessageStatusEvent,
+  type MessageUpdatedEvent,
+  type ConversationUpdatedEvent,
   type PresenceEvent,
   type TypingEvent,
 } from "@ebano/shared";
@@ -16,7 +18,9 @@ import { useAuth } from "./AuthProvider";
 import { ConversationList } from "./ConversationList";
 import { ChatView } from "./ChatView";
 import { NewChatModal } from "./NewChatModal";
+import { StatusTray } from "./StatusTray";
 import { registerPush } from "@/lib/push";
+import { conversationPeer } from "@/lib/format";
 
 function tempId() {
   return `tmp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -33,6 +37,9 @@ export function ChatShell() {
   >({});
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [mobileShowChat, setMobileShowChat] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [editing, setEditing] = useState<Message | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
 
   const selected = useMemo(
@@ -42,32 +49,35 @@ export function ChatShell() {
 
   const refreshConversations = useCallback(async () => {
     const res = await api<{ conversations: ConversationSummary[] }>(
-      "/conversations",
+      `/conversations${showArchived ? "?archived=1" : ""}`,
     );
     setConversations(res.conversations);
-  }, []);
+  }, [showArchived]);
 
-  const loadMessages = useCallback(async (conversationId: string) => {
-    const res = await api<{ messages: Message[] }>(
-      `/conversations/${conversationId}/messages`,
-    );
-    setMessages(res.messages);
-
-    const unread = res.messages
-      .filter((m) => m.senderId !== user?.id && m.status !== "read")
-      .map((m) => m.id);
-    if (unread.length > 0) {
-      getSocket().emit(SOCKET_EVENTS.MESSAGE_READ, {
-        conversationId,
-        messageIds: unread,
-      });
-      setConversations((prev) =>
-        prev.map((c) =>
-          c.id === conversationId ? { ...c, unreadCount: 0 } : c,
-        ),
+  const loadMessages = useCallback(
+    async (conversationId: string) => {
+      const res = await api<{ messages: Message[] }>(
+        `/conversations/${conversationId}/messages`,
       );
-    }
-  }, [user?.id]);
+      setMessages(res.messages);
+
+      const unread = res.messages
+        .filter((m) => m.senderId !== user?.id && m.status !== "read" && !m.deletedAt)
+        .map((m) => m.id);
+      if (unread.length > 0) {
+        getSocket().emit(SOCKET_EVENTS.MESSAGE_READ, {
+          conversationId,
+          messageIds: unread,
+        });
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === conversationId ? { ...c, unreadCount: 0 } : c,
+          ),
+        );
+      }
+    },
+    [user?.id],
+  );
 
   useEffect(() => {
     if (!user) return;
@@ -96,12 +106,12 @@ export function ChatShell() {
             ...c,
             lastMessage: msg,
             unreadCount:
-              isOpen || msg.senderId === user.id
-                ? 0
-                : c.unreadCount + 1,
+              isOpen || msg.senderId === user.id ? 0 : c.unreadCount + 1,
           };
         });
         return [...next].sort((a, b) => {
+          if (a.pinnedAt && !b.pinnedAt) return -1;
+          if (!a.pinnedAt && b.pinnedAt) return 1;
           const at = a.lastMessage?.createdAt ?? a.createdAt;
           const bt = b.lastMessage?.createdAt ?? b.createdAt;
           return bt.localeCompare(at);
@@ -127,6 +137,19 @@ export function ChatShell() {
       }
     };
 
+    const onUpdated = (event: MessageUpdatedEvent) => {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === event.message.id ? event.message : m)),
+      );
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.lastMessage?.id === event.message.id
+            ? { ...c, lastMessage: event.message }
+            : c,
+        ),
+      );
+    };
+
     const onStatus = (event: MessageStatusEvent) => {
       setMessages((prev) =>
         prev.map((m) => {
@@ -137,15 +160,6 @@ export function ChatShell() {
           return { ...m, status: event.status };
         }),
       );
-      setConversations((prev) =>
-        prev.map((c) => {
-          if (c.lastMessage?.id !== event.messageId) return c;
-          return {
-            ...c,
-            lastMessage: { ...c.lastMessage, status: event.status },
-          };
-        }),
-      );
     };
 
     const onTyping = (event: TypingEvent) => {
@@ -154,10 +168,7 @@ export function ChatShell() {
         const current = new Set(prev[event.conversationId] ?? []);
         if (event.isTyping) current.add(event.userId);
         else current.delete(event.userId);
-        return {
-          ...prev,
-          [event.conversationId]: [...current],
-        };
+        return { ...prev, [event.conversationId]: [...current] };
       });
     };
 
@@ -167,72 +178,119 @@ export function ChatShell() {
           ...c,
           participants: c.participants.map((p) =>
             p.id === event.userId
-              ? {
-                  ...p,
-                  status: event.status,
-                  lastSeenAt: event.lastSeenAt,
-                }
+              ? { ...p, status: event.status, lastSeenAt: event.lastSeenAt }
               : p,
           ),
         })),
       );
     };
 
+    const onConversationUpdated = (event: ConversationUpdatedEvent) => {
+      socket.emit("conversation:join", event.conversationId);
+      void refreshConversations();
+    };
+
     socket.on(SOCKET_EVENTS.MESSAGE_NEW, onNew);
+    socket.on(SOCKET_EVENTS.MESSAGE_UPDATED, onUpdated);
     socket.on(SOCKET_EVENTS.MESSAGE_STATUS, onStatus);
     socket.on(SOCKET_EVENTS.TYPING, onTyping);
     socket.on(SOCKET_EVENTS.PRESENCE, onPresence);
+    socket.on(SOCKET_EVENTS.CONVERSATION_UPDATED, onConversationUpdated);
 
     return () => {
       socket.off(SOCKET_EVENTS.MESSAGE_NEW, onNew);
+      socket.off(SOCKET_EVENTS.MESSAGE_UPDATED, onUpdated);
       socket.off(SOCKET_EVENTS.MESSAGE_STATUS, onStatus);
       socket.off(SOCKET_EVENTS.TYPING, onTyping);
       socket.off(SOCKET_EVENTS.PRESENCE, onPresence);
+      socket.off(SOCKET_EVENTS.CONVERSATION_UPDATED, onConversationUpdated);
     };
   }, [user, selectedId, refreshConversations]);
 
   async function selectConversation(id: string) {
     setSelectedId(id);
     setMobileShowChat(true);
+    setReplyTo(null);
+    setEditing(null);
     getSocket().emit("conversation:join", id);
     await loadMessages(id);
   }
 
   function sendMessage(input: {
     content?: string;
-    type: "text" | "image" | "file";
+    type: "text" | "image" | "file" | "audio" | "video";
     mediaUrl?: string;
+    durationMs?: number;
+    replyToId?: string;
   }) {
     if (!selectedId || !user) return;
+
+    if (editing) {
+      getSocket().emit(SOCKET_EVENTS.MESSAGE_EDIT, {
+        messageId: editing.id,
+        content: input.content ?? "",
+      });
+      setEditing(null);
+      return;
+    }
+
     const clientTempId = tempId();
     const optimistic: Message = {
       id: clientTempId,
       conversationId: selectedId,
       senderId: user.id,
+      replyToId: input.replyToId ?? null,
+      replyTo: replyTo
+        ? {
+            id: replyTo.id,
+            senderId: replyTo.senderId,
+            content: replyTo.content,
+            type: replyTo.type,
+          }
+        : null,
       content: input.content ?? null,
       type: input.type,
       mediaUrl: input.mediaUrl ?? null,
+      durationMs: input.durationMs ?? null,
       createdAt: new Date().toISOString(),
       editedAt: null,
       deletedAt: null,
       status: "sent",
+      reactions: [],
     };
     setMessages((prev) => [...prev, optimistic]);
+    setReplyTo(null);
     getSocket().emit(SOCKET_EVENTS.MESSAGE_SEND, {
       conversationId: selectedId,
       content: input.content,
       type: input.type,
       mediaUrl: input.mediaUrl,
+      durationMs: input.durationMs,
+      replyToId: input.replyToId,
       clientTempId,
     });
   }
 
-  function handleTyping(isTyping: boolean) {
+  async function patchPrefs(patch: {
+    pinned?: boolean;
+    archived?: boolean;
+    muted?: boolean;
+  }) {
     if (!selectedId) return;
-    getSocket().emit(SOCKET_EVENTS.TYPING, {
-      conversationId: selectedId,
-      isTyping,
+    const res = await api<{ conversation: ConversationSummary }>(
+      `/conversations/${selectedId}/prefs`,
+      { method: "PATCH", body: patch },
+    );
+    setConversations((prev) => {
+      if (patch.archived !== undefined) {
+        return prev.filter((c) => c.id !== selectedId);
+      }
+      return prev.map((c) => (c.id === selectedId ? res.conversation : c));
     });
+    if (patch.archived !== undefined) {
+      setSelectedId(null);
+      setMobileShowChat(false);
+    }
   }
 
   if (loading || !user) {
@@ -254,7 +312,7 @@ export function ChatShell() {
   return (
     <div className="flex h-dvh overflow-hidden bg-ebano-bg">
       <aside
-        className={`w-full border-r border-white/5 md:w-[360px] md:shrink-0 ${
+        className={`w-full border-r border-white/5 md:w-[380px] md:shrink-0 ${
           mobileShowChat ? "hidden md:flex" : "flex"
         } flex-col`}
       >
@@ -282,6 +340,7 @@ export function ChatShell() {
             </button>
           </div>
         </div>
+        <StatusTray />
         <ConversationList
           conversations={conversations}
           currentUserId={user.id}
@@ -289,6 +348,8 @@ export function ChatShell() {
           onSelect={(id) => void selectConversation(id)}
           search={search}
           onSearch={setSearch}
+          showArchived={showArchived}
+          onToggleArchived={() => setShowArchived((v) => !v)}
         />
       </aside>
 
@@ -303,9 +364,49 @@ export function ChatShell() {
             currentUserId={user.id}
             messages={messages}
             typingUsers={typingByConversation[selected.id] ?? []}
+            replyTo={replyTo}
+            editing={editing}
             onBack={() => setMobileShowChat(false)}
             onSend={sendMessage}
-            onTyping={handleTyping}
+            onTyping={(isTyping) =>
+              getSocket().emit(SOCKET_EVENTS.TYPING, {
+                conversationId: selected.id,
+                isTyping,
+              })
+            }
+            onReply={setReplyTo}
+            onReact={(messageId, emoji) =>
+              getSocket().emit(SOCKET_EVENTS.MESSAGE_REACT, { messageId, emoji })
+            }
+            onEdit={setEditing}
+            onDelete={(messageId) =>
+              getSocket().emit(SOCKET_EVENTS.MESSAGE_DELETE, { messageId })
+            }
+            onCancelReply={() => setReplyTo(null)}
+            onCancelEdit={() => setEditing(null)}
+            onTogglePin={() =>
+              void patchPrefs({ pinned: !selected.pinnedAt })
+            }
+            onToggleMute={() =>
+              void patchPrefs({ muted: !selected.mutedUntil })
+            }
+            onToggleArchive={() =>
+              void patchPrefs({ archived: !selected.archivedAt })
+            }
+            onBlockPeer={() => {
+              const peer = conversationPeer(selected, user.id);
+              if (!peer) return;
+              const blocked = window.confirm(`Bloquear ${peer.name}?`);
+              if (!blocked) return;
+              void api("/users/block", { body: { userId: peer.id } }).then(() =>
+                alert("Usuário bloqueado"),
+              );
+            }}
+            onCopyInvite={() => {
+              if (!selected.inviteCode) return;
+              void navigator.clipboard.writeText(selected.inviteCode);
+              alert(`Código de convite: ${selected.inviteCode}`);
+            }}
           />
         ) : (
           <div className="flex h-full flex-col items-center justify-center px-6 text-center">

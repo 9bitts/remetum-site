@@ -16,21 +16,49 @@ export function ChatView({
   currentUserId,
   messages,
   typingUsers,
+  replyTo,
+  editing,
   onBack,
   onSend,
   onTyping,
+  onReply,
+  onReact,
+  onEdit,
+  onDelete,
+  onCancelReply,
+  onCancelEdit,
+  onTogglePin,
+  onToggleMute,
+  onToggleArchive,
+  onBlockPeer,
+  onCopyInvite,
 }: {
   conversation: ConversationSummary;
   currentUserId: string;
   messages: Message[];
   typingUsers: string[];
+  replyTo: Message | null;
+  editing: Message | null;
   onBack: () => void;
   onSend: (input: {
     content?: string;
-    type: "text" | "image" | "file";
+    type: "text" | "image" | "file" | "audio" | "video";
     mediaUrl?: string;
+    durationMs?: number;
+    replyToId?: string;
   }) => void;
   onTyping: (isTyping: boolean) => void;
+  onReply: (message: Message) => void;
+  onReact: (messageId: string, emoji: string) => void;
+  onEdit: (message: Message) => void;
+  onDelete: (messageId: string) => void;
+  onCancelReply: () => void;
+  onCancelEdit: () => void;
+  onTogglePin: () => void;
+  onToggleMute: () => void;
+  onToggleArchive: () => void;
+  onBlockPeer: () => void;
+  onCopyInvite: () => void;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const peer = conversationPeer(conversation, currentUserId);
@@ -65,9 +93,30 @@ export function ChatView({
           online={peer?.status === "online"}
           size="sm"
         />
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="truncate font-medium">{title}</p>
           <p className="truncate text-xs text-ebano-muted">{subtitle}</p>
+        </div>
+        <div className="flex gap-1 text-xs">
+          <button type="button" onClick={onTogglePin} className="rounded-lg px-2 py-1 text-ebano-muted hover:bg-white/5">
+            {conversation.pinnedAt ? "Desafixar" : "Fixar"}
+          </button>
+          <button type="button" onClick={onToggleMute} className="rounded-lg px-2 py-1 text-ebano-muted hover:bg-white/5">
+            {conversation.mutedUntil ? "Som" : "Silenciar"}
+          </button>
+          <button type="button" onClick={onToggleArchive} className="rounded-lg px-2 py-1 text-ebano-muted hover:bg-white/5">
+            {conversation.archivedAt ? "Desarquivar" : "Arquivar"}
+          </button>
+          {conversation.type === "group" && conversation.inviteCode ? (
+            <button type="button" onClick={onCopyInvite} className="rounded-lg px-2 py-1 text-ebano-muted hover:bg-white/5">
+              Convite
+            </button>
+          ) : null}
+          {conversation.type === "direct" ? (
+            <button type="button" onClick={onBlockPeer} className="rounded-lg px-2 py-1 text-red-300/80 hover:bg-white/5">
+              Bloquear
+            </button>
+          ) : null}
         </div>
       </header>
 
@@ -77,12 +126,23 @@ export function ChatView({
             key={message.id}
             message={message}
             mine={message.senderId === currentUserId}
+            onReply={onReply}
+            onReact={onReact}
+            onEdit={onEdit}
+            onDelete={onDelete}
           />
         ))}
         <div ref={bottomRef} />
       </div>
 
-      <Composer onSend={onSend} onTyping={onTyping} />
+      <Composer
+        replyTo={replyTo}
+        editing={editing}
+        onCancelReply={onCancelReply}
+        onCancelEdit={onCancelEdit}
+        onSend={onSend}
+        onTyping={onTyping}
+      />
     </div>
   );
 }

@@ -10,6 +10,7 @@ import { conversationRoutes } from "./routes/conversations.js";
 import { userRoutes } from "./routes/users.js";
 import { uploadRoutes } from "./routes/uploads.js";
 import { pushRoutes } from "./routes/push.js";
+import { statusRoutes } from "./routes/status.js";
 import { createSocketServer } from "./sockets/index.js";
 import { config } from "./config.js";
 import { getUploadsDir } from "./services/uploads.js";
@@ -19,7 +20,7 @@ async function main() {
   const app = Fastify({ logger: true });
 
   await app.register(cors, {
-    origin: config.corsOrigin,
+    origin: config.corsOrigins,
     credentials: true,
   });
 
@@ -43,10 +44,11 @@ async function main() {
   await app.register(userRoutes);
   await app.register(uploadRoutes);
   await app.register(pushRoutes);
+  await app.register(statusRoutes);
 
   await app.listen({ port: config.port, host: "0.0.0.0" });
 
-  createSocketServer(app.server, config.corsOrigin);
+  createSocketServer(app.server, config.corsOrigins);
   app.log.info(`Remetum API listening on :${config.port}`);
 }
 

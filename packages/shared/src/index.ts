@@ -12,6 +12,7 @@ export type {
   CreateDirectInput,
   CreateGroupInput,
   UpdateProfileInput,
+  StatusItem,
 } from "./chat";
 
 export type UserStatus = "online" | "offline";
@@ -20,7 +21,7 @@ export type ConversationType = "direct" | "group";
 
 export type ParticipantRole = "member" | "admin";
 
-export type MessageType = "text" | "image" | "file";
+export type MessageType = "text" | "image" | "file" | "audio" | "video";
 
 export type DeliveryStatus = "sent" | "delivered" | "read";
 
@@ -49,6 +50,7 @@ export interface Conversation {
   type: ConversationType;
   name: string | null;
   avatarUrl: string | null;
+  inviteCode: string | null;
   createdAt: string;
 }
 
@@ -59,17 +61,34 @@ export interface ConversationParticipant {
   joinedAt: string;
 }
 
+export interface MessageReactionSummary {
+  emoji: string;
+  count: number;
+  reactedByMe: boolean;
+}
+
+export interface MessagePreview {
+  id: string;
+  senderId: string;
+  content: string | null;
+  type: MessageType;
+}
+
 export interface Message {
   id: string;
   conversationId: string;
   senderId: string;
+  replyToId: string | null;
+  replyTo: MessagePreview | null;
   content: string | null;
   type: MessageType;
   mediaUrl: string | null;
+  durationMs: number | null;
   createdAt: string;
   editedAt: string | null;
   deletedAt: string | null;
   status?: DeliveryStatus;
+  reactions: MessageReactionSummary[];
 }
 
 export interface MessageStatusRecord {
@@ -79,12 +98,13 @@ export interface MessageStatusRecord {
   updatedAt: string;
 }
 
-/** Socket.IO event payloads (shared contract) */
 export interface MessageSendPayload {
   conversationId: string;
   content?: string;
   type: MessageType;
   mediaUrl?: string;
+  durationMs?: number;
+  replyToId?: string;
   clientTempId?: string;
 }
 
@@ -111,6 +131,24 @@ export interface MessageStatusEvent {
   conversationId: string;
 }
 
+export interface MessageEditPayload {
+  messageId: string;
+  content: string;
+}
+
+export interface MessageDeletePayload {
+  messageId: string;
+}
+
+export interface MessageReactPayload {
+  messageId: string;
+  emoji: string;
+}
+
+export interface MessageUpdatedEvent {
+  message: Message;
+}
+
 export interface TypingPayload {
   conversationId: string;
   isTyping: boolean;
@@ -128,13 +166,23 @@ export interface PresenceEvent {
   lastSeenAt: string | null;
 }
 
+export interface ConversationUpdatedEvent {
+  conversationId: string;
+  reason: "created" | "joined" | "prefs";
+}
+
 export const SOCKET_EVENTS = {
   MESSAGE_SEND: "message:send",
   MESSAGE_NEW: "message:new",
   MESSAGE_SENT: "message:sent",
   MESSAGE_READ: "message:read",
   MESSAGE_STATUS: "message:status",
+  MESSAGE_EDIT: "message:edit",
+  MESSAGE_DELETE: "message:delete",
+  MESSAGE_REACT: "message:react",
+  MESSAGE_UPDATED: "message:updated",
   TYPING: "typing",
   PRESENCE: "presence",
+  CONVERSATION_UPDATED: "conversation:updated",
   ERROR: "error",
 } as const;
