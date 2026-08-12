@@ -1,0 +1,28 @@
+{
+  "name": "ebano",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Remetum — mensagens com estilo (PWA)",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "dev:web": "npm run dev -w @ebano/web",
+    "dev:api": "npm run dev -w @ebano/api",
+    "db:generate": "npm run db:generate -w @ebano/api",
+    "db:push": "npm run db:push -w @ebano/api"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.4",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "npm@11.16.0"
+}

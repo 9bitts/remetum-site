@@ -1,0 +1,48 @@
+import type { FastifyInstance } from "fastify";
+import { prisma } from "../prisma.js";
+import { toAuthUser, toPublicUser } from "../lib/serialize.js";
+
+export async function userRoutes(app: FastifyInstance) {
+  app.get<{ Querystring: { q?: string } }>(
+    "/users/search",
+    { preHandler: [app.authenticate] },
+    async (request) => {
+      const q = (request.query.q ?? "").trim();
+      if (q.length < 2) return { users: [] };
+
+      const users = await prisma.user.findMany({
+        where: {
+          id: { not: request.userId! },
+          OR: [
+            { name: { contains: q, mode: "insensitive" } },
+            { email: { contains: q, mode: "insensitive" } },
+          ],
+        },
+        take: 20,
+        orderBy: { name: "asc" },
+      });
+
+      return { users: users.map(toPublicUser) };
+    },
+  );
+
+  app.patch<{
+    Body: { name?: string; bio?: string | null; avatarUrl?: string | null };
+  }>("/users/me", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const body = request.body ?? {};
+    if (body.name !== undefined && body.name.trim().length < 2) {
+      return reply.code(400).send({ error: "Nome inválido" });
+    }
+
+    const user = await prisma.user.update({
+      where: { id: request.userId! },
+      data: {
+        ...(body.name !== undefined ? { name: body.name.trim() } : {}),
+        ...(body.bio !== undefined ? { bio: body.bio } : {}),
+        ...(body.avatarUrl !== undefined ? { avatarUrl: body.avatarUrl } : {}),
+      },
+    });
+
+    return { user: toAuthUser(user) };
+  });
+}

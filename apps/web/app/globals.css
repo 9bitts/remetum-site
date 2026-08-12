@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ebano-bg: #0b0b0d;
+  --color-ebano-surface: #18181b;
+  --color-ebano-sent: #0f3d2e;
+  --color-ebano-accent: #c9a227;
+  --color-ebano-text: #f2f2f0;
+  --color-ebano-muted: #9a9a9e;
+  --color-ebano-online: #2ecc71;
+  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --radius-ebano: 14px;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--color-ebano-bg);
+  color: var(--color-ebano-text);
+  font-family: var(--font-sans);
+}

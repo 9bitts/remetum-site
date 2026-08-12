@@ -1,0 +1,15 @@
+node_modules
+dist
+.next
+.turbo
+.DS_Store
+*.log
+.env
+.env.local
+.env.*.local
+coverage
+.vercel
+*.tsbuildinfo
+apps/api/prisma/*.db
+apps/api/prisma/*.db-journal
+uploads
