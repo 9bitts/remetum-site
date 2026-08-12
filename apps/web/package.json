@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev --port 3000",
-    "build": "next build",
+    "build": "npm run build -w @ebano/shared && next build",
     "start": "next start",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "next lint"

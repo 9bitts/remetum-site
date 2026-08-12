@@ -1,25 +1,50 @@
-# API (apps/api)
-# RootDir: apps/api
-# Start: npm run start
-# Build: cd ../.. && npm install && npm run build -w @ebano/shared && npm run db:generate -w @ebano/api && npm run build -w @ebano/api
+# Remetum no Railway
 
-# WEB (apps/web)
-# RootDir: apps/web
-# Start: npm run start
-# Build: cd ../.. && npm install && npm run build -w @ebano/shared && npm run build -w @ebano/web
-# Env: NEXT_PUBLIC_API_URL=https://<api-domain>
+Monorepo com 2 serviços a partir da raiz do repo (`9bitts/remetum-site`).
 
-# Shared env vars for API:
-# DATABASE_URL=
-# JWT_SECRET=
-# JWT_REFRESH_SECRET=
-# CORS_ORIGIN=https://<web-domain>
-# PUBLIC_API_URL=https://<api-domain>
-# R2_ACCOUNT_ID=
-# R2_ACCESS_KEY=
-# R2_SECRET_KEY=
-# R2_BUCKET=
-# R2_PUBLIC_BASE_URL=
-# VAPID_PUBLIC_KEY=
-# VAPID_PRIVATE_KEY=
-# VAPID_SUBJECT=mailto:hello@ebano.app
+## 1) Postgres
+
+No projeto Railway: **Add → Database → PostgreSQL**.  
+Isso cria `DATABASE_URL` automaticamente (adicione a variável ao serviço `@ebano/api`).
+
+## 2) Serviço API (`@ebano/api`)
+
+- Root Directory: *(vazio / raiz do repo)*
+- Build: `npm run build --workspace=@ebano/api`
+- Start: `npm run start --workspace=@ebano/api`
+- Release / Deploy command (opcional, mas recomendado):  
+  `npm run db:push --workspace=@ebano/api`
+
+Variáveis:
+
+```
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+JWT_SECRET=<aleatório-longo>
+JWT_REFRESH_SECRET=<outro-aleatório-longo>
+CORS_ORIGIN=https://<domínio-do-web>
+PUBLIC_API_URL=https://<domínio-da-api>
+PORT=4000
+```
+
+## 3) Serviço Web (`@ebano/web`)
+
+- Root Directory: *(vazio / raiz do repo)*
+- Build: `npm run build --workspace=@ebano/web`
+- Start: `npm run start --workspace=@ebano/web`
+
+Variáveis:
+
+```
+NEXT_PUBLIC_API_URL=https://<domínio-da-api>
+```
+
+## 4) Domínios
+
+- Gere domínio público nos dois serviços (Settings → Networking / Domains).
+- Ajuste `CORS_ORIGIN`, `PUBLIC_API_URL` e `NEXT_PUBLIC_API_URL` para esses URLs.
+- Redeploy o **web** depois de setar `NEXT_PUBLIC_API_URL` (é bakeado no build).
+
+## Observação
+
+Os packages internos ainda se chamam `@ebano/*` (nome técnico do monorepo).  
+A marca no produto é **Remetum**.
