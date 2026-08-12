@@ -214,3 +214,36 @@ export async function markDeliveredForUser(userId: string, messageIds: string[])
     data: { status: "delivered" },
   });
 }
+
+export async function forwardMessage(
+  userId: string,
+  messageId: string,
+  targetConversationIds: string[],
+) {
+  const original = await prisma.message.findUnique({ where: { id: messageId } });
+  if (!original || original.deletedAt) {
+    throw Object.assign(new Error("Mensagem não encontrada"), { statusCode: 404 });
+  }
+  await assertParticipant(original.conversationId, userId);
+
+  const uniqueTargets = [...new Set(targetConversationIds)];
+  if (uniqueTargets.length === 0) {
+    throw Object.assign(new Error("Nenhuma conversa de destino"), {
+      statusCode: 400,
+    });
+  }
+
+  const created = [];
+  for (const conversationId of uniqueTargets) {
+    const message = await createMessage({
+      conversationId,
+      senderId: userId,
+      content: original.content ?? undefined,
+      type: original.type,
+      mediaUrl: original.mediaUrl ?? undefined,
+      durationMs: original.durationMs ?? undefined,
+    });
+    created.push(message);
+  }
+  return created;
+}

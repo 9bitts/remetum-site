@@ -12,6 +12,7 @@ export function MessageBubble({
   onReact,
   onEdit,
   onDelete,
+  onForward,
 }: {
   message: Message;
   mine: boolean;
@@ -19,6 +20,7 @@ export function MessageBubble({
   onReact: (messageId: string, emoji: string) => void;
   onEdit: (message: Message) => void;
   onDelete: (messageId: string) => void;
+  onForward?: (message: Message) => void;
 }) {
   if (message.deletedAt) {
     return (
@@ -138,6 +140,15 @@ export function MessageBubble({
           <button type="button" className="text-ebano-muted hover:text-ebano-accent" onClick={() => onReply(message)}>
             Responder
           </button>
+          {onForward ? (
+            <button
+              type="button"
+              className="text-ebano-muted hover:text-ebano-accent"
+              onClick={() => onForward(message)}
+            >
+              Encaminhar
+            </button>
+          ) : null}
           {QUICK_REACTIONS.map((emoji) => (
             <button
               key={emoji}

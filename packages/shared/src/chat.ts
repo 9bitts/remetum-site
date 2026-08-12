@@ -8,6 +8,7 @@ export interface ConversationSummary {
   pinnedAt: string | null;
   archivedAt: string | null;
   mutedUntil: string | null;
+  myRole: "member" | "admin";
   participants: Array<{
     id: string;
     name: string;
@@ -15,6 +16,7 @@ export interface ConversationSummary {
     bio: string | null;
     status: "online" | "offline";
     lastSeenAt: string | null;
+    role: "member" | "admin";
   }>;
   lastMessage: {
     id: string;
@@ -74,4 +76,38 @@ export interface StatusItem {
   expiresAt: string;
   viewedByMe: boolean;
   viewCount: number;
+}
+
+export interface CallInvitePayload {
+  conversationId: string;
+  video: boolean;
+}
+
+export interface CallSignalPayload {
+  callId: string;
+  conversationId: string;
+}
+
+export interface CallOfferEvent {
+  callId: string;
+  conversationId: string;
+  fromUserId: string;
+  fromName: string;
+  video: boolean;
+  livekitUrl: string | null;
+}
+
+export interface CallAcceptedEvent {
+  callId: string;
+  conversationId: string;
+  token: string;
+  livekitUrl: string;
+  roomName: string;
+  video: boolean;
+}
+
+export interface CallEndedEvent {
+  callId: string;
+  conversationId: string;
+  reason: "rejected" | "cancelled" | "hangup" | "unavailable";
 }

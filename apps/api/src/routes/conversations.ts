@@ -1,14 +1,18 @@
 import type { FastifyInstance } from "fastify";
-import { SOCKET_EVENTS } from "@ebano/shared";
+import { SOCKET_EVENTS, type ParticipantRole } from "@ebano/shared";
 import {
   createGroupConversation,
   getConversationSummary,
   getOrCreateDirectConversation,
   joinByInviteCode,
+  leaveConversation,
   listConversationsForUser,
   listMessages,
+  removeMember,
   searchMessages,
+  setMemberRole,
   updateConversationPrefs,
+  updateGroup,
 } from "../services/conversations.js";
 import { getIo } from "../sockets/io.js";
 import { prisma } from "../prisma.js";
@@ -25,7 +29,7 @@ function sendError(
 
 async function notifyConversationMembers(
   conversationId: string,
-  reason: "created" | "joined" | "prefs",
+  reason: "created" | "joined" | "prefs" | "left" | "updated",
   exceptUserId?: string,
 ) {
   const io = getIo();
@@ -37,6 +41,12 @@ async function notifyConversationMembers(
   for (const m of members) {
     if (exceptUserId && m.userId === exceptUserId) continue;
     io.to(`user:${m.userId}`).emit(SOCKET_EVENTS.CONVERSATION_UPDATED, {
+      conversationId,
+      reason,
+    });
+  }
+  if (exceptUserId && reason === "left") {
+    io.to(`user:${exceptUserId}`).emit(SOCKET_EVENTS.CONVERSATION_UPDATED, {
       conversationId,
       reason,
     });
@@ -94,6 +104,7 @@ export async function conversationRoutes(app: FastifyInstance) {
       pinned?: boolean;
       archived?: boolean;
       muted?: boolean;
+      muteMinutes?: number;
       clearChat?: boolean;
     };
   }>("/conversations/:id/prefs", { preHandler: [app.authenticate] }, async (request, reply) => {
@@ -179,6 +190,92 @@ export async function conversationRoutes(app: FastifyInstance) {
       }
     },
   );
+
+  app.post<{ Params: { id: string } }>(
+    "/conversations/:id/leave",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      try {
+        const conversationId = request.params.id;
+        await leaveConversation(request.userId!, conversationId);
+        await notifyConversationMembers(conversationId, "left", request.userId!);
+        return { ok: true };
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: { memberId?: string } }>(
+    "/conversations/:id/members/remove",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      try {
+        const memberId = request.body?.memberId;
+        if (!memberId) {
+          return reply.code(400).send({ error: "memberId é obrigatório" });
+        }
+        const conversation = await removeMember(
+          request.userId!,
+          request.params.id,
+          memberId,
+        );
+        const io = getIo();
+        io?.to(`user:${memberId}`).emit(SOCKET_EVENTS.CONVERSATION_UPDATED, {
+          conversationId: request.params.id,
+          reason: "left",
+        });
+        await notifyConversationMembers(request.params.id, "updated");
+        return { conversation };
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  app.post<{
+    Params: { id: string };
+    Body: { memberId?: string; role?: ParticipantRole };
+  }>(
+    "/conversations/:id/members/role",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      try {
+        const memberId = request.body?.memberId;
+        const role = request.body?.role;
+        if (!memberId || !role) {
+          return reply.code(400).send({ error: "memberId e role são obrigatórios" });
+        }
+        const conversation = await setMemberRole(
+          request.userId!,
+          request.params.id,
+          memberId,
+          role,
+        );
+        await notifyConversationMembers(request.params.id, "updated");
+        return { conversation };
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  app.patch<{
+    Params: { id: string };
+    Body: { name?: string; avatarUrl?: string | null };
+  }>("/conversations/:id/group", { preHandler: [app.authenticate] }, async (request, reply) => {
+    try {
+      const conversation = await updateGroup(
+        request.userId!,
+        request.params.id,
+        request.body ?? {},
+      );
+      await notifyConversationMembers(request.params.id, "updated");
+      return { conversation };
+    } catch (err) {
+      return sendError(reply, err);
+    }
+  });
 
   app.get<{ Querystring: { q?: string } }>(
     "/search/messages",

@@ -65,6 +65,11 @@ export const config = {
     privateKey: process.env.VAPID_PRIVATE_KEY ?? "",
     subject: process.env.VAPID_SUBJECT ?? "mailto:hello@remetum.com",
   },
+  livekit: {
+    url: process.env.LIVEKIT_URL ?? "",
+    apiKey: process.env.LIVEKIT_API_KEY ?? "",
+    apiSecret: process.env.LIVEKIT_API_SECRET ?? "",
+  },
 };
 
 export function r2Enabled() {
@@ -78,4 +83,10 @@ export function r2Enabled() {
 
 export function pushEnabled() {
   return Boolean(config.vapid.publicKey && config.vapid.privateKey);
+}
+
+export function livekitConfigured() {
+  return Boolean(
+    config.livekit.url && config.livekit.apiKey && config.livekit.apiSecret,
+  );
 }

@@ -7,6 +7,8 @@ import authPlugin from "./plugins/auth.js";
 import { healthRoutes } from "./routes/health.js";
 import { authRoutes } from "./routes/auth.js";
 import { conversationRoutes } from "./routes/conversations.js";
+import { messageRoutes } from "./routes/messages.js";
+import { callRoutes } from "./routes/calls.js";
 import { userRoutes } from "./routes/users.js";
 import { uploadRoutes } from "./routes/uploads.js";
 import { pushRoutes } from "./routes/push.js";
@@ -41,6 +43,8 @@ async function main() {
   await app.register(healthRoutes);
   await app.register(authRoutes);
   await app.register(conversationRoutes);
+  await app.register(messageRoutes);
+  await app.register(callRoutes);
   await app.register(userRoutes);
   await app.register(uploadRoutes);
   await app.register(pushRoutes);

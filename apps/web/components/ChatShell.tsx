@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   SOCKET_EVENTS,
+  type CallAcceptedEvent,
+  type CallEndedEvent,
+  type CallOfferEvent,
   type ConversationSummary,
   type Message,
   type MessageNewEvent,
@@ -19,33 +22,51 @@ import { ConversationList } from "./ConversationList";
 import { ChatView } from "./ChatView";
 import { NewChatModal } from "./NewChatModal";
 import { StatusTray } from "./StatusTray";
+import { SettingsModal } from "./SettingsModal";
+import { GroupInfoModal } from "./GroupInfoModal";
+import { CallOverlay, type CallUiState } from "./CallOverlay";
 import { registerPush } from "@/lib/push";
-import { conversationPeer } from "@/lib/format";
+import { conversationPeer, conversationTitle } from "@/lib/format";
 
 function tempId() {
   return `tmp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export function ChatShell() {
-  const { user, loading, logout } = useAuth();
+  const { user, loading, logout, setUser } = useAuth();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [search, setSearch] = useState("");
+  const [messageHits, setMessageHits] = useState<Message[]>([]);
   const [typingByConversation, setTypingByConversation] = useState<
     Record<string, string[]>
   >({});
   const [newChatOpen, setNewChatOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [groupInfoOpen, setGroupInfoOpen] = useState(false);
   const [mobileShowChat, setMobileShowChat] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editing, setEditing] = useState<Message | null>(null);
+  const [forwarding, setForwarding] = useState<Message | null>(null);
+  const [callState, setCallState] = useState<CallUiState | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
 
   const selected = useMemo(
     () => conversations.find((c) => c.id === selectedId) ?? null,
     [conversations, selectedId],
   );
+
+  const typingNames = useMemo(() => {
+    if (!selected) return [] as string[];
+    const ids = typingByConversation[selected.id] ?? [];
+    return ids
+      .map((id) => selected.participants.find((p) => p.id === id)?.name)
+      .filter((n): n is string => Boolean(n));
+  }, [selected, typingByConversation]);
 
   const refreshConversations = useCallback(async () => {
     const res = await api<{ conversations: ConversationSummary[] }>(
@@ -55,26 +76,40 @@ export function ChatShell() {
   }, [showArchived]);
 
   const loadMessages = useCallback(
-    async (conversationId: string) => {
-      const res = await api<{ messages: Message[] }>(
-        `/conversations/${conversationId}/messages`,
+    async (conversationId: string, cursor?: string) => {
+      const qs = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+      const res = await api<{ messages: Message[]; nextCursor: string | null }>(
+        `/conversations/${conversationId}/messages${qs}`,
       );
-      setMessages(res.messages);
 
-      const unread = res.messages
-        .filter((m) => m.senderId !== user?.id && m.status !== "read" && !m.deletedAt)
-        .map((m) => m.id);
-      if (unread.length > 0) {
-        getSocket().emit(SOCKET_EVENTS.MESSAGE_READ, {
-          conversationId,
-          messageIds: unread,
+      if (cursor) {
+        setMessages((prev) => {
+          const existing = new Set(prev.map((m) => m.id));
+          const older = res.messages.filter((m) => !existing.has(m.id));
+          return [...older, ...prev];
         });
-        setConversations((prev) =>
-          prev.map((c) =>
-            c.id === conversationId ? { ...c, unreadCount: 0 } : c,
-          ),
-        );
+      } else {
+        setMessages(res.messages);
+        const unread = res.messages
+          .filter(
+            (m) =>
+              m.senderId !== user?.id && m.status !== "read" && !m.deletedAt,
+          )
+          .map((m) => m.id);
+        if (unread.length > 0) {
+          getSocket().emit(SOCKET_EVENTS.MESSAGE_READ, {
+            conversationId,
+            messageIds: unread,
+          });
+          setConversations((prev) =>
+            prev.map((c) =>
+              c.id === conversationId ? { ...c, unreadCount: 0 } : c,
+            ),
+          );
+        }
       }
+      setNextCursor(res.nextCursor);
+      return res;
     },
     [user?.id],
   );
@@ -86,6 +121,22 @@ export function ChatShell() {
     );
     void registerPush().catch(() => undefined);
   }, [user, refreshConversations]);
+
+  useEffect(() => {
+    const q = search.trim();
+    if (q.length < 2) {
+      setMessageHits([]);
+      return;
+    }
+    const t = setTimeout(() => {
+      void api<{ messages: Message[] }>(
+        `/search/messages?q=${encodeURIComponent(q)}`,
+      )
+        .then((res) => setMessageHits(res.messages))
+        .catch(() => setMessageHits([]));
+    }, 250);
+    return () => clearTimeout(t);
+  }, [search]);
 
   useEffect(() => {
     if (!user) return;
@@ -190,12 +241,54 @@ export function ChatShell() {
       void refreshConversations();
     };
 
+    const onCallOffer = (offer: CallOfferEvent) => {
+      if (offer.fromUserId === user.id) {
+        setCallState((prev) => {
+          if (prev?.phase === "outgoing" && prev.conversationId === offer.conversationId) {
+            return { ...prev, callId: offer.callId };
+          }
+          return prev;
+        });
+        return;
+      }
+      setCallState({ phase: "incoming", offer });
+    };
+
+    const onCallAccepted = (accepted: CallAcceptedEvent) => {
+      setCallState((prev) => {
+        let peerName = "Chamada";
+        if (prev?.phase === "outgoing") peerName = prev.peerName;
+        else if (prev?.phase === "incoming") peerName = prev.offer.fromName;
+        return { phase: "active", accepted, peerName };
+      });
+    };
+
+    const onCallEnded = (_event: CallEndedEvent) => {
+      setCallState(null);
+    };
+
+    const onSocketError = (payload: { event?: string; message?: string }) => {
+      if (
+        payload.event === SOCKET_EVENTS.CALL_INVITE ||
+        payload.event === SOCKET_EVENTS.CALL_ACCEPT
+      ) {
+        setCallState({
+          phase: "error",
+          message: payload.message ?? "Falha na chamada",
+        });
+      }
+    };
+
     socket.on(SOCKET_EVENTS.MESSAGE_NEW, onNew);
     socket.on(SOCKET_EVENTS.MESSAGE_UPDATED, onUpdated);
     socket.on(SOCKET_EVENTS.MESSAGE_STATUS, onStatus);
     socket.on(SOCKET_EVENTS.TYPING, onTyping);
     socket.on(SOCKET_EVENTS.PRESENCE, onPresence);
     socket.on(SOCKET_EVENTS.CONVERSATION_UPDATED, onConversationUpdated);
+    socket.on(SOCKET_EVENTS.CALL_OFFER, onCallOffer);
+    socket.on(SOCKET_EVENTS.CALL_ACCEPTED, onCallAccepted);
+    socket.on(SOCKET_EVENTS.CALL_ENDED, onCallEnded);
+    socket.on(SOCKET_EVENTS.ERROR, onSocketError);
 
     return () => {
       socket.off(SOCKET_EVENTS.MESSAGE_NEW, onNew);
@@ -204,6 +297,10 @@ export function ChatShell() {
       socket.off(SOCKET_EVENTS.TYPING, onTyping);
       socket.off(SOCKET_EVENTS.PRESENCE, onPresence);
       socket.off(SOCKET_EVENTS.CONVERSATION_UPDATED, onConversationUpdated);
+      socket.off(SOCKET_EVENTS.CALL_OFFER, onCallOffer);
+      socket.off(SOCKET_EVENTS.CALL_ACCEPTED, onCallAccepted);
+      socket.off(SOCKET_EVENTS.CALL_ENDED, onCallEnded);
+      socket.off(SOCKET_EVENTS.ERROR, onSocketError);
     };
   }, [user, selectedId, refreshConversations]);
 
@@ -212,8 +309,19 @@ export function ChatShell() {
     setMobileShowChat(true);
     setReplyTo(null);
     setEditing(null);
+    setNextCursor(null);
     getSocket().emit("conversation:join", id);
     await loadMessages(id);
+  }
+
+  async function loadOlder() {
+    if (!selectedId || !nextCursor || loadingOlder) return;
+    setLoadingOlder(true);
+    try {
+      await loadMessages(selectedId, nextCursor);
+    } finally {
+      setLoadingOlder(false);
+    }
   }
 
   function sendMessage(input: {
@@ -275,12 +383,21 @@ export function ChatShell() {
     pinned?: boolean;
     archived?: boolean;
     muted?: boolean;
+    muteMinutes?: number;
+    clearChat?: boolean;
   }) {
     if (!selectedId) return;
     const res = await api<{ conversation: ConversationSummary }>(
       `/conversations/${selectedId}/prefs`,
       { method: "PATCH", body: patch },
     );
+    if (patch.clearChat) {
+      setConversations((prev) =>
+        prev.map((c) => (c.id === selectedId ? res.conversation : c)),
+      );
+      await loadMessages(selectedId);
+      return;
+    }
     setConversations((prev) => {
       if (patch.archived !== undefined) {
         return prev.filter((c) => c.id !== selectedId);
@@ -290,6 +407,87 @@ export function ChatShell() {
     if (patch.archived !== undefined) {
       setSelectedId(null);
       setMobileShowChat(false);
+    }
+  }
+
+  function startCall(video: boolean) {
+    if (!selected || selected.type !== "direct" || !user) return;
+    const peer = conversationPeer(selected, user.id);
+    getSocket().emit(SOCKET_EVENTS.CALL_INVITE, {
+      conversationId: selected.id,
+      video,
+    });
+    setCallState({
+      phase: "outgoing",
+      conversationId: selected.id,
+      callId: null,
+      video,
+      peerName: peer?.name ?? "Contato",
+    });
+  }
+
+  function acceptCall() {
+    if (callState?.phase !== "incoming") return;
+    getSocket().emit(SOCKET_EVENTS.CALL_ACCEPT, {
+      callId: callState.offer.callId,
+      conversationId: callState.offer.conversationId,
+    });
+  }
+
+  function rejectCall() {
+    if (callState?.phase !== "incoming") return;
+    getSocket().emit(SOCKET_EVENTS.CALL_REJECT, {
+      callId: callState.offer.callId,
+      conversationId: callState.offer.conversationId,
+    });
+    setCallState(null);
+  }
+
+  function cancelCall() {
+    if (callState?.phase !== "outgoing") return;
+    getSocket().emit(SOCKET_EVENTS.CALL_CANCEL, {
+      callId: callState.callId ?? "",
+      conversationId: callState.conversationId,
+    });
+    setCallState(null);
+  }
+
+  function hangupCall() {
+    if (callState?.phase === "active") {
+      getSocket().emit(SOCKET_EVENTS.CALL_HANGUP, {
+        callId: callState.accepted.callId,
+        conversationId: callState.accepted.conversationId,
+      });
+    }
+    setCallState(null);
+  }
+
+  async function forwardTo(conversationId: string) {
+    if (!forwarding) return;
+    try {
+      await api(`/messages/${forwarding.id}/forward`, {
+        body: { conversationIds: [conversationId] },
+      });
+      setForwarding(null);
+      if (conversationId === selectedId) {
+        await loadMessages(conversationId);
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Falha ao encaminhar");
+    }
+  }
+
+  async function leaveGroup() {
+    if (!selectedId) return;
+    if (!window.confirm("Sair deste grupo?")) return;
+    try {
+      await api(`/conversations/${selectedId}/leave`, { method: "POST" });
+      setConversations((prev) => prev.filter((c) => c.id !== selectedId));
+      setSelectedId(null);
+      setMobileShowChat(false);
+      setGroupInfoOpen(false);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Falha ao sair do grupo");
     }
   }
 
@@ -326,6 +524,13 @@ export function ChatShell() {
           <div className="flex gap-2">
             <button
               type="button"
+              onClick={() => setSettingsOpen(true)}
+              className="rounded-xl border border-white/10 px-3 py-1.5 text-sm text-ebano-muted hover:text-ebano-text"
+            >
+              Perfil
+            </button>
+            <button
+              type="button"
               onClick={() => setNewChatOpen(true)}
               className="rounded-xl bg-ebano-accent px-3 py-1.5 text-sm font-medium text-ebano-bg"
             >
@@ -350,6 +555,7 @@ export function ChatShell() {
           onSearch={setSearch}
           showArchived={showArchived}
           onToggleArchived={() => setShowArchived((v) => !v)}
+          messageHits={messageHits}
         />
       </aside>
 
@@ -363,9 +569,11 @@ export function ChatShell() {
             conversation={selected}
             currentUserId={user.id}
             messages={messages}
-            typingUsers={typingByConversation[selected.id] ?? []}
+            typingNames={typingNames}
             replyTo={replyTo}
             editing={editing}
+            loadingOlder={loadingOlder}
+            hasMoreOlder={Boolean(nextCursor)}
             onBack={() => setMobileShowChat(false)}
             onSend={sendMessage}
             onTyping={(isTyping) =>
@@ -382,17 +590,26 @@ export function ChatShell() {
             onDelete={(messageId) =>
               getSocket().emit(SOCKET_EVENTS.MESSAGE_DELETE, { messageId })
             }
+            onForward={setForwarding}
             onCancelReply={() => setReplyTo(null)}
             onCancelEdit={() => setEditing(null)}
-            onTogglePin={() =>
-              void patchPrefs({ pinned: !selected.pinnedAt })
-            }
-            onToggleMute={() =>
-              void patchPrefs({ muted: !selected.mutedUntil })
-            }
+            onTogglePin={() => void patchPrefs({ pinned: !selected.pinnedAt })}
+            onMute={(muteMinutes) => {
+              if (muteMinutes === null) {
+                void patchPrefs({ muted: false });
+              } else {
+                void patchPrefs({ muted: true, muteMinutes });
+              }
+            }}
             onToggleArchive={() =>
               void patchPrefs({ archived: !selected.archivedAt })
             }
+            onClearChat={() => {
+              if (!window.confirm("Limpar mensagens desta conversa para você?")) {
+                return;
+              }
+              void patchPrefs({ clearChat: true });
+            }}
             onBlockPeer={() => {
               const peer = conversationPeer(selected, user.id);
               if (!peer) return;
@@ -407,6 +624,11 @@ export function ChatShell() {
               void navigator.clipboard.writeText(selected.inviteCode);
               alert(`Código de convite: ${selected.inviteCode}`);
             }}
+            onGroupInfo={() => setGroupInfoOpen(true)}
+            onLeaveGroup={() => void leaveGroup()}
+            onCallVoice={() => startCall(false)}
+            onCallVideo={() => startCall(true)}
+            onLoadOlder={() => void loadOlder()}
           />
         ) : (
           <div className="flex h-full flex-col items-center justify-center px-6 text-center">
@@ -431,6 +653,76 @@ export function ChatShell() {
           });
           void selectConversation(conversation.id);
         }}
+      />
+
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        user={user}
+        onUserUpdated={setUser}
+      />
+
+      {selected && selected.type === "group" ? (
+        <GroupInfoModal
+          open={groupInfoOpen}
+          conversation={selected}
+          currentUserId={user.id}
+          onClose={() => setGroupInfoOpen(false)}
+          onUpdated={(conversation) => {
+            setConversations((prev) =>
+              prev.map((c) => (c.id === conversation.id ? conversation : c)),
+            );
+          }}
+          onLeft={() => {
+            setConversations((prev) =>
+              prev.filter((c) => c.id !== selected.id),
+            );
+            setSelectedId(null);
+            setMobileShowChat(false);
+          }}
+        />
+      ) : null}
+
+      {forwarding ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center">
+          <div className="max-h-[80dvh] w-full max-w-md overflow-y-auto rounded-[var(--radius-ebano)] bg-ebano-surface p-4 shadow-xl">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Encaminhar para</h2>
+              <button
+                type="button"
+                onClick={() => setForwarding(null)}
+                className="text-ebano-muted hover:text-ebano-text"
+              >
+                Fechar
+              </button>
+            </div>
+            <div className="space-y-1">
+              {conversations
+                .filter((c) => !c.archivedAt)
+                .map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => void forwardTo(c.id)}
+                    className="flex w-full items-center rounded-xl px-3 py-2.5 text-left hover:bg-white/5"
+                  >
+                    <span className="truncate text-sm">
+                      {conversationTitle(c, user.id)}
+                    </span>
+                  </button>
+                ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <CallOverlay
+        state={callState}
+        onAccept={acceptCall}
+        onReject={rejectCall}
+        onCancel={cancelCall}
+        onHangup={hangupCall}
+        onDismissError={() => setCallState(null)}
       />
     </div>
   );

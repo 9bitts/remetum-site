@@ -24,8 +24,12 @@ JWT_REFRESH_SECRET=<outro-aleatório-longo>
 CORS_ORIGIN=https://remetum.com,https://www.remetum.com
 PUBLIC_API_URL=https://api.remetum.com
 PORT=4000
+LIVEKIT_URL=wss://<seu-projeto>.livekit.cloud
+LIVEKIT_API_KEY=<key>
+LIVEKIT_API_SECRET=<secret>
 ```
 
+`LIVEKIT_*` é opcional: sem isso o chat funciona; chamadas voz/vídeo ficam desabilitadas.
 Domínio customizado da API: `api.remetum.com` (não use o apex no serviço da API).
 
 ## 3) Serviço Web (`@ebano/web`)

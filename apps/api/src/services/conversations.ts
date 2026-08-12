@@ -1,7 +1,11 @@
 import { randomBytes } from "node:crypto";
 import { prisma } from "../prisma.js";
 import { toMessage, toPublicUser } from "../lib/serialize.js";
-import type { ConversationSummary, Message as SharedMessage } from "@ebano/shared";
+import type {
+  ConversationSummary,
+  Message as SharedMessage,
+  ParticipantRole,
+} from "@ebano/shared";
 
 export async function assertParticipant(conversationId: string, userId: string) {
   const participant = await prisma.conversationParticipant.findUnique({
@@ -11,6 +15,14 @@ export async function assertParticipant(conversationId: string, userId: string) 
   });
   if (!participant) {
     throw Object.assign(new Error("Sem acesso a esta conversa"), { statusCode: 403 });
+  }
+  return participant;
+}
+
+async function assertAdmin(conversationId: string, userId: string) {
+  const participant = await assertParticipant(conversationId, userId);
+  if (participant.role !== "admin") {
+    throw Object.assign(new Error("Sem permissão de admin"), { statusCode: 403 });
   }
   return participant;
 }
@@ -126,7 +138,11 @@ export async function joinByInviteCode(userId: string, inviteCode: string) {
   return conversation;
 }
 
-async function unreadCount(conversationId: string, userId: string) {
+async function unreadCount(
+  conversationId: string,
+  userId: string,
+  after?: Date | null,
+) {
   return prisma.messageStatus.count({
     where: {
       userId,
@@ -135,9 +151,22 @@ async function unreadCount(conversationId: string, userId: string) {
         conversationId,
         senderId: { not: userId },
         deletedAt: null,
+        ...(after ? { createdAt: { gt: after } } : {}),
       },
     },
   });
+}
+
+function toSummaryParticipant(
+  p: {
+    role: ParticipantRole;
+    user: Parameters<typeof toPublicUser>[0];
+  },
+): ConversationSummary["participants"][number] {
+  return {
+    ...toPublicUser(p.user),
+    role: p.role,
+  };
 }
 
 export async function listConversationsForUser(
@@ -150,7 +179,6 @@ export async function listConversationsForUser(
       participants: {
         some: {
           userId,
-          deletedForMeAt: null,
           ...(archived
             ? { archivedAt: { not: null } }
             : { archivedAt: null }),
@@ -159,12 +187,6 @@ export async function listConversationsForUser(
     },
     include: {
       participants: { include: { user: true } },
-      messages: {
-        where: { deletedAt: null },
-        orderBy: { createdAt: "desc" },
-        take: 1,
-        include: { reactions: true, replyTo: true },
-      },
     },
   });
 
@@ -179,7 +201,17 @@ export async function listConversationsForUser(
   const summaries = await Promise.all(
     rows.map(async (row) => {
       const mine = myParticipation.get(row.id);
-      const last = row.messages[0];
+      const cutoff = mine?.deletedForMeAt ?? null;
+      const last = await prisma.message.findFirst({
+        where: {
+          conversationId: row.id,
+          deletedAt: null,
+          ...(cutoff ? { createdAt: { gt: cutoff } } : {}),
+        },
+        orderBy: { createdAt: "desc" },
+        include: { reactions: true, replyTo: true },
+      });
+
       let lastMessage: SharedMessage | null = null;
       if (last) {
         const status =
@@ -213,9 +245,10 @@ export async function listConversationsForUser(
         pinnedAt: mine?.pinnedAt?.toISOString() ?? null,
         archivedAt: mine?.archivedAt?.toISOString() ?? null,
         mutedUntil: mine?.mutedUntil?.toISOString() ?? null,
-        participants: row.participants.map((p) => toPublicUser(p.user)),
+        myRole: mine?.role ?? "member",
+        participants: row.participants.map(toSummaryParticipant),
         lastMessage,
-        unreadCount: await unreadCount(row.id, userId),
+        unreadCount: await unreadCount(row.id, userId, cutoff),
       } satisfies ConversationSummary;
     }),
   );
@@ -245,6 +278,8 @@ export async function getConversationSummary(
   return found;
 }
 
+const DEFAULT_MUTE_MINUTES = 365 * 24 * 60;
+
 export async function updateConversationPrefs(
   conversationId: string,
   userId: string,
@@ -252,6 +287,7 @@ export async function updateConversationPrefs(
     pinned?: boolean;
     archived?: boolean;
     muted?: boolean;
+    muteMinutes?: number;
     clearChat?: boolean;
   },
 ) {
@@ -270,9 +306,15 @@ export async function updateConversationPrefs(
     data.archivedAt = prefs.archived ? new Date() : null;
   }
   if (prefs.muted !== undefined) {
-    data.mutedUntil = prefs.muted
-      ? new Date(Date.now() + 1000 * 60 * 60 * 24 * 365)
-      : null;
+    if (prefs.muted) {
+      const minutes =
+        typeof prefs.muteMinutes === "number" && prefs.muteMinutes > 0
+          ? prefs.muteMinutes
+          : DEFAULT_MUTE_MINUTES;
+      data.mutedUntil = new Date(Date.now() + minutes * 60 * 1000);
+    } else {
+      data.mutedUntil = null;
+    }
   }
   if (prefs.clearChat) {
     data.deletedForMeAt = new Date();
@@ -285,23 +327,6 @@ export async function updateConversationPrefs(
     data,
   });
 
-  if (prefs.clearChat && prefs.archived === undefined && prefs.pinned === undefined && prefs.muted === undefined) {
-    return {
-      id: conversationId,
-      type: "direct",
-      name: null,
-      avatarUrl: null,
-      inviteCode: null,
-      createdAt: new Date().toISOString(),
-      pinnedAt: null,
-      archivedAt: null,
-      mutedUntil: null,
-      participants: [],
-      lastMessage: null,
-      unreadCount: 0,
-    } satisfies ConversationSummary;
-  }
-
   return getConversationSummary(conversationId, userId);
 }
 
@@ -311,12 +336,19 @@ export async function listMessages(
   cursor?: string,
   limit = 50,
 ) {
-  await assertParticipant(conversationId, userId);
+  const participant = await assertParticipant(conversationId, userId);
+  const cutoff = participant.deletedForMeAt;
+
+  const createdAtFilter: { gt?: Date; lt?: Date } = {};
+  if (cutoff) createdAtFilter.gt = cutoff;
+  if (cursor) createdAtFilter.lt = new Date(cursor);
 
   const messages = await prisma.message.findMany({
     where: {
       conversationId,
-      ...(cursor ? { createdAt: { lt: new Date(cursor) } } : {}),
+      ...(Object.keys(createdAtFilter).length > 0
+        ? { createdAt: createdAtFilter }
+        : {}),
     },
     include: { reactions: true, replyTo: true },
     orderBy: { createdAt: "desc" },
@@ -358,11 +390,23 @@ export async function searchMessages(userId: string, query: string) {
   const q = query.trim();
   if (q.length < 2) return [] as SharedMessage[];
 
+  const memberships = await prisma.conversationParticipant.findMany({
+    where: { userId },
+    select: { conversationId: true, deletedForMeAt: true },
+  });
+
+  const orFilters = memberships.map((m) => ({
+    conversationId: m.conversationId,
+    ...(m.deletedForMeAt ? { createdAt: { gt: m.deletedForMeAt } } : {}),
+  }));
+
+  if (orFilters.length === 0) return [] as SharedMessage[];
+
   const messages = await prisma.message.findMany({
     where: {
       deletedAt: null,
       content: { contains: q, mode: "insensitive" },
-      conversation: { participants: { some: { userId } } },
+      OR: orFilters,
     },
     include: { reactions: true, replyTo: true },
     orderBy: { createdAt: "desc" },
@@ -370,4 +414,131 @@ export async function searchMessages(userId: string, query: string) {
   });
 
   return messages.map((m) => toMessage(m, undefined, userId));
+}
+
+export async function leaveConversation(userId: string, conversationId: string) {
+  await assertParticipant(conversationId, userId);
+  await prisma.conversationParticipant.delete({
+    where: {
+      conversationId_userId: { conversationId, userId },
+    },
+  });
+  return { ok: true as const };
+}
+
+export async function removeMember(
+  adminId: string,
+  conversationId: string,
+  memberId: string,
+) {
+  await assertAdmin(conversationId, adminId);
+  const conversation = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+  });
+  if (!conversation || conversation.type !== "group") {
+    throw Object.assign(new Error("Só grupos permitem remover membros"), {
+      statusCode: 400,
+    });
+  }
+  if (memberId === adminId) {
+    throw Object.assign(new Error("Use sair do grupo para remover a si mesmo"), {
+      statusCode: 400,
+    });
+  }
+
+  const member = await prisma.conversationParticipant.findUnique({
+    where: {
+      conversationId_userId: { conversationId, userId: memberId },
+    },
+  });
+  if (!member) {
+    throw Object.assign(new Error("Membro não encontrado"), { statusCode: 404 });
+  }
+
+  await prisma.conversationParticipant.delete({
+    where: {
+      conversationId_userId: { conversationId, userId: memberId },
+    },
+  });
+
+  return getConversationSummary(conversationId, adminId);
+}
+
+export async function setMemberRole(
+  adminId: string,
+  conversationId: string,
+  memberId: string,
+  role: ParticipantRole,
+) {
+  await assertAdmin(conversationId, adminId);
+  const conversation = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+  });
+  if (!conversation || conversation.type !== "group") {
+    throw Object.assign(new Error("Só grupos permitem alterar cargos"), {
+      statusCode: 400,
+    });
+  }
+  if (role !== "admin" && role !== "member") {
+    throw Object.assign(new Error("Cargo inválido"), { statusCode: 400 });
+  }
+
+  const member = await prisma.conversationParticipant.findUnique({
+    where: {
+      conversationId_userId: { conversationId, userId: memberId },
+    },
+  });
+  if (!member) {
+    throw Object.assign(new Error("Membro não encontrado"), { statusCode: 404 });
+  }
+
+  await prisma.conversationParticipant.update({
+    where: {
+      conversationId_userId: { conversationId, userId: memberId },
+    },
+    data: { role },
+  });
+
+  return getConversationSummary(conversationId, adminId);
+}
+
+export async function updateGroup(
+  adminId: string,
+  conversationId: string,
+  input: { name?: string; avatarUrl?: string | null },
+) {
+  await assertAdmin(conversationId, adminId);
+  const conversation = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+  });
+  if (!conversation || conversation.type !== "group") {
+    throw Object.assign(new Error("Só grupos podem ser editados"), {
+      statusCode: 400,
+    });
+  }
+
+  const data: { name?: string; avatarUrl?: string | null } = {};
+  if (input.name !== undefined) {
+    const trimmed = input.name.trim();
+    if (!trimmed) {
+      throw Object.assign(new Error("Nome do grupo é obrigatório"), {
+        statusCode: 400,
+      });
+    }
+    data.name = trimmed;
+  }
+  if (input.avatarUrl !== undefined) {
+    data.avatarUrl = input.avatarUrl;
+  }
+
+  if (Object.keys(data).length === 0) {
+    throw Object.assign(new Error("Nada para atualizar"), { statusCode: 400 });
+  }
+
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data,
+  });
+
+  return getConversationSummary(conversationId, adminId);
 }

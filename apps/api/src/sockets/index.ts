@@ -2,6 +2,8 @@ import type { Server as HttpServer } from "node:http";
 import { Server, type Socket } from "socket.io";
 import {
   SOCKET_EVENTS,
+  type CallInvitePayload,
+  type CallSignalPayload,
   type MessageDeletePayload,
   type MessageEditPayload,
   type MessageReactPayload,
@@ -28,6 +30,13 @@ import {
   untrackSocket,
 } from "../services/presence.js";
 import { notifyUsers } from "../services/push.js";
+import { assertParticipant, isBlockedEither } from "../services/conversations.js";
+import { createCall, endCall, getCall, setCallStatus } from "../services/calls.js";
+import {
+  createLivekitToken,
+  getLivekitUrl,
+  livekitConfigured,
+} from "../services/livekit.js";
 import { setIo } from "./io.js";
 
 function parseCookies(header?: string) {
@@ -272,6 +281,158 @@ export function createSocketServer(
         userId,
         isTyping: payload.isTyping,
       });
+    });
+
+    socket.on(SOCKET_EVENTS.CALL_INVITE, async (payload: CallInvitePayload) => {
+      try {
+        if (!livekitConfigured()) {
+          socket.emit(SOCKET_EVENTS.ERROR, {
+            event: SOCKET_EVENTS.CALL_INVITE,
+            message: "Chamadas não estão configuradas",
+          });
+          return;
+        }
+
+        await assertParticipant(payload.conversationId, userId);
+        const conversation = await prisma.conversation.findUnique({
+          where: { id: payload.conversationId },
+          include: { participants: { include: { user: true } } },
+        });
+        if (!conversation || conversation.type !== "direct") {
+          throw Object.assign(new Error("Chamadas só em conversas diretas"), {
+            statusCode: 400,
+          });
+        }
+
+        const other = conversation.participants.find((p) => p.userId !== userId);
+        if (!other) {
+          throw Object.assign(new Error("Destinatário não encontrado"), {
+            statusCode: 404,
+          });
+        }
+        if (await isBlockedEither(userId, other.userId)) {
+          throw Object.assign(new Error("Usuário bloqueado"), { statusCode: 403 });
+        }
+
+        const me = conversation.participants.find((p) => p.userId === userId);
+        const call = createCall({
+          conversationId: payload.conversationId,
+          fromUserId: userId,
+          toUserId: other.userId,
+          video: Boolean(payload.video),
+        });
+
+        io.to(`user:${other.userId}`).emit(SOCKET_EVENTS.CALL_OFFER, {
+          callId: call.callId,
+          conversationId: payload.conversationId,
+          fromUserId: userId,
+          fromName: me?.user.name ?? "Usuário",
+          video: call.video,
+          livekitUrl: getLivekitUrl(),
+        });
+      } catch (err) {
+        socket.emit(SOCKET_EVENTS.ERROR, {
+          event: SOCKET_EVENTS.CALL_INVITE,
+          message: (err as Error).message,
+        });
+      }
+    });
+
+    socket.on(SOCKET_EVENTS.CALL_ACCEPT, async (payload: CallSignalPayload) => {
+      try {
+        const call = getCall(payload.callId);
+        if (!call || call.status === "ended") {
+          throw Object.assign(new Error("Chamada não encontrada"), {
+            statusCode: 404,
+          });
+        }
+        if (call.toUserId !== userId) {
+          throw Object.assign(new Error("Sem permissão"), { statusCode: 403 });
+        }
+
+        setCallStatus(payload.callId, "active");
+
+        const [caller, callee] = await Promise.all([
+          prisma.user.findUnique({ where: { id: call.fromUserId } }),
+          prisma.user.findUnique({ where: { id: call.toUserId } }),
+        ]);
+        if (!caller || !callee) {
+          throw Object.assign(new Error("Usuário não encontrado"), {
+            statusCode: 404,
+          });
+        }
+
+        const livekitUrl = getLivekitUrl();
+        if (!livekitUrl) {
+          throw Object.assign(new Error("LiveKit não configurado"), {
+            statusCode: 503,
+          });
+        }
+
+        const [callerToken, calleeToken] = await Promise.all([
+          createLivekitToken({
+            roomName: call.roomName,
+            identity: caller.id,
+            name: caller.name,
+          }),
+          createLivekitToken({
+            roomName: call.roomName,
+            identity: callee.id,
+            name: callee.name,
+          }),
+        ]);
+
+        const base = {
+          callId: payload.callId,
+          conversationId: call.conversationId,
+          livekitUrl,
+          roomName: call.roomName,
+          video: call.video,
+        };
+
+        io.to(`user:${call.fromUserId}`).emit(SOCKET_EVENTS.CALL_ACCEPTED, {
+          ...base,
+          token: callerToken,
+        });
+        io.to(`user:${call.toUserId}`).emit(SOCKET_EVENTS.CALL_ACCEPTED, {
+          ...base,
+          token: calleeToken,
+        });
+      } catch (err) {
+        socket.emit(SOCKET_EVENTS.ERROR, {
+          event: SOCKET_EVENTS.CALL_ACCEPT,
+          message: (err as Error).message,
+        });
+      }
+    });
+
+    const endCallWithReason = (
+      payload: CallSignalPayload,
+      reason: "rejected" | "cancelled" | "hangup",
+    ) => {
+      const call = getCall(payload.callId);
+      if (!call) return;
+      if (userId !== call.fromUserId && userId !== call.toUserId) return;
+      endCall(payload.callId);
+      const ended = {
+        callId: payload.callId,
+        conversationId: call.conversationId,
+        reason,
+      };
+      io.to(`user:${call.fromUserId}`).emit(SOCKET_EVENTS.CALL_ENDED, ended);
+      io.to(`user:${call.toUserId}`).emit(SOCKET_EVENTS.CALL_ENDED, ended);
+    };
+
+    socket.on(SOCKET_EVENTS.CALL_REJECT, (payload: CallSignalPayload) => {
+      endCallWithReason(payload, "rejected");
+    });
+
+    socket.on(SOCKET_EVENTS.CALL_CANCEL, (payload: CallSignalPayload) => {
+      endCallWithReason(payload, "cancelled");
+    });
+
+    socket.on(SOCKET_EVENTS.CALL_HANGUP, (payload: CallSignalPayload) => {
+      endCallWithReason(payload, "hangup");
     });
 
     socket.on("conversation:join", (conversationId: string) => {

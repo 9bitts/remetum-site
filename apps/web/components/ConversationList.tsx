@@ -1,6 +1,6 @@
 "use client";
 
-import type { ConversationSummary } from "@ebano/shared";
+import type { ConversationSummary, Message } from "@ebano/shared";
 import { Avatar } from "./Avatar";
 import {
   conversationPeer,
@@ -17,6 +17,7 @@ export function ConversationList({
   onSearch,
   showArchived,
   onToggleArchived,
+  messageHits,
 }: {
   conversations: ConversationSummary[];
   currentUserId: string;
@@ -26,10 +27,11 @@ export function ConversationList({
   onSearch: (value: string) => void;
   showArchived: boolean;
   onToggleArchived: () => void;
+  messageHits?: Message[];
 }) {
+  const q = search.trim().toLowerCase();
   const filtered = conversations.filter((c) => {
     const title = conversationTitle(c, currentUserId).toLowerCase();
-    const q = search.trim().toLowerCase();
     if (!q) return true;
     return (
       title.includes(q) ||
@@ -43,7 +45,7 @@ export function ConversationList({
         <input
           value={search}
           onChange={(e) => onSearch(e.target.value)}
-          placeholder="Buscar conversas"
+          placeholder="Buscar conversas e mensagens"
           className="w-full rounded-xl border border-white/10 bg-ebano-bg px-3 py-2 text-sm outline-none focus:border-ebano-accent"
         />
         <button
@@ -55,6 +57,44 @@ export function ConversationList({
         </button>
       </div>
       <div className="flex-1 overflow-y-auto px-2 pb-2">
+        {messageHits && messageHits.length > 0 ? (
+          <div className="mb-3">
+            <p className="px-2 pb-1 text-[11px] tracking-wide text-ebano-accent uppercase">
+              Mensagens
+            </p>
+            {messageHits.map((m) => {
+              const conv = conversations.find((c) => c.id === m.conversationId);
+              const title = conv
+                ? conversationTitle(conv, currentUserId)
+                : "Conversa";
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => onSelect(m.conversationId)}
+                  className="mb-1 flex w-full flex-col rounded-[var(--radius-ebano)] px-2 py-2 text-left hover:bg-white/5"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="truncate text-sm font-medium">{title}</p>
+                    <span className="shrink-0 text-[11px] text-ebano-muted">
+                      {formatTime(m.createdAt)}
+                    </span>
+                  </div>
+                  <p className="mt-0.5 truncate text-xs text-ebano-muted">
+                    {m.content || "Mensagem"}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+
+        {q.length >= 2 ? (
+          <p className="px-2 pb-1 text-[11px] tracking-wide text-ebano-muted uppercase">
+            Conversas
+          </p>
+        ) : null}
+
         {filtered.map((c) => {
           const peer = conversationPeer(c, currentUserId);
           const title = conversationTitle(c, currentUserId);
@@ -76,8 +116,12 @@ export function ConversationList({
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-2">
                   <p className="truncate font-medium">
-                    {c.pinnedAt ? "📌 " : ""}
-                    {c.mutedUntil ? "🔇 " : ""}
+                    {c.pinnedAt ? (
+                      <span className="mr-1 text-ebano-accent">📌</span>
+                    ) : null}
+                    {c.mutedUntil ? (
+                      <span className="mr-1 opacity-70">🔇</span>
+                    ) : null}
                     {title}
                   </p>
                   {c.lastMessage ? (
@@ -101,8 +145,8 @@ export function ConversationList({
                               : c.lastMessage?.content || "Sem mensagens"}
                   </p>
                   {c.unreadCount > 0 ? (
-                    <span className="rounded-full bg-ebano-accent px-1.5 py-0.5 text-[10px] font-semibold text-ebano-bg">
-                      {c.unreadCount}
+                    <span className="min-w-[1.25rem] rounded-full bg-ebano-accent px-1.5 py-0.5 text-center text-[10px] font-semibold text-ebano-bg">
+                      {c.unreadCount > 99 ? "99+" : c.unreadCount}
                     </span>
                   ) : null}
                 </div>
@@ -110,7 +154,7 @@ export function ConversationList({
             </button>
           );
         })}
-        {filtered.length === 0 ? (
+        {filtered.length === 0 && (!messageHits || messageHits.length === 0) ? (
           <p className="px-3 py-10 text-center text-sm text-ebano-muted">
             Nenhuma conversa ainda
           </p>

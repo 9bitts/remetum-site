@@ -13,6 +13,11 @@ export type {
   CreateGroupInput,
   UpdateProfileInput,
   StatusItem,
+  CallInvitePayload,
+  CallSignalPayload,
+  CallOfferEvent,
+  CallAcceptedEvent,
+  CallEndedEvent,
 } from "./chat";
 
 export type UserStatus = "online" | "offline";
@@ -168,7 +173,7 @@ export interface PresenceEvent {
 
 export interface ConversationUpdatedEvent {
   conversationId: string;
-  reason: "created" | "joined" | "prefs";
+  reason: "created" | "joined" | "prefs" | "left" | "updated";
 }
 
 export const SOCKET_EVENTS = {
@@ -184,5 +189,13 @@ export const SOCKET_EVENTS = {
   TYPING: "typing",
   PRESENCE: "presence",
   CONVERSATION_UPDATED: "conversation:updated",
+  CALL_INVITE: "call:invite",
+  CALL_OFFER: "call:offer",
+  CALL_ACCEPT: "call:accept",
+  CALL_REJECT: "call:reject",
+  CALL_CANCEL: "call:cancel",
+  CALL_HANGUP: "call:hangup",
+  CALL_ACCEPTED: "call:accepted",
+  CALL_ENDED: "call:ended",
   ERROR: "error",
 } as const;
