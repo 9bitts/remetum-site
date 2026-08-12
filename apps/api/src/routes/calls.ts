@@ -1,6 +1,10 @@
 import type { FastifyInstance } from "fastify";
+import {
+  getLivekitUrl,
+  livekitConfigured,
+  verifyLivekitCredentials,
+} from "../services/livekit.js";
 import { config } from "../config.js";
-import { getLivekitUrl, livekitConfigured } from "../services/livekit.js";
 
 export async function callRoutes(app: FastifyInstance) {
   app.get("/calls/config", { preHandler: [app.authenticate] }, async () => {
@@ -12,5 +16,9 @@ export async function callRoutes(app: FastifyInstance) {
       keyLength: key.length,
       secretLength: config.livekit.apiSecret.length,
     };
+  });
+
+  app.get("/calls/self-test", { preHandler: [app.authenticate] }, async () => {
+    return verifyLivekitCredentials();
   });
 }
