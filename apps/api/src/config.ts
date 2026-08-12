@@ -26,7 +26,11 @@ export const config = {
   cookie: {
     access: "ebano_access",
     refresh: "ebano_refresh",
-    secure: process.env.NODE_ENV === "production",
+    // Cross-subdomain (remetum.com → api.remetum.com) needs Secure in prod HTTPS
+    secure:
+      process.env.COOKIE_SECURE === "true" ||
+      process.env.NODE_ENV === "production" ||
+      (process.env.PUBLIC_API_URL ?? "").startsWith("https://"),
     sameSite: "lax" as const,
     path: "/",
   },

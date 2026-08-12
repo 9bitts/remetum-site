@@ -12,8 +12,8 @@ Isso cria `DATABASE_URL` automaticamente (adicione a variável ao serviço `@eba
 - Root Directory: *(vazio / raiz do repo)*
 - Build: `npm run build --workspace=@ebano/api`
 - Start: `npm run start --workspace=@ebano/api`
-- Release / Deploy command (recomendado):  
-  `npm run db:push --workspace=@ebano/api`
+- Start já roda `prisma db push` antes de subir o servidor (cria/atualiza tabelas).  
+- Se o login der 500, confira nos logs do API se o `db push` passou e se `DATABASE_URL` aponta para o Postgres do projeto.
 
 Variáveis:
 

@@ -37,42 +37,53 @@ export async function authRoutes(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      const name = request.body?.name?.trim() ?? "";
-      const emailRaw = request.body?.email ?? "";
-      const password = request.body?.password ?? "";
+      try {
+        const name = request.body?.name?.trim() ?? "";
+        const emailRaw = request.body?.email ?? "";
+        const password = request.body?.password ?? "";
 
-      if (name.length < 2) {
-        return reply.code(400).send({ error: "Nome deve ter ao menos 2 caracteres" });
+        if (name.length < 2) {
+          return reply
+            .code(400)
+            .send({ error: "Nome deve ter ao menos 2 caracteres" });
+        }
+        if (!emailRaw.includes("@")) {
+          return reply.code(400).send({ error: "E-mail inválido" });
+        }
+        if (!validatePassword(password)) {
+          return reply
+            .code(400)
+            .send({ error: "Senha deve ter ao menos 8 caracteres" });
+        }
+
+        const email = normalizeEmail(emailRaw);
+        const existing = await prisma.user.findUnique({ where: { email } });
+        if (existing) {
+          return reply.code(409).send({ error: "E-mail já cadastrado" });
+        }
+
+        const passwordHash = await hashPassword(password);
+        const user = await prisma.user.create({
+          data: {
+            name,
+            email,
+            passwordHash,
+          },
+        });
+
+        const [accessToken, refreshToken] = await Promise.all([
+          signAccessToken(user.id, user.email),
+          signRefreshToken(user.id),
+        ]);
+        setAuthCookies(reply, { accessToken, refreshToken });
+
+        return reply.code(201).send({ user: toAuthUser(user) });
+      } catch (err) {
+        request.log.error(err);
+        const message =
+          err instanceof Error ? err.message : "Erro interno no registro";
+        return reply.code(500).send({ error: message });
       }
-      if (!emailRaw.includes("@")) {
-        return reply.code(400).send({ error: "E-mail inválido" });
-      }
-      if (!validatePassword(password)) {
-        return reply.code(400).send({ error: "Senha deve ter ao menos 8 caracteres" });
-      }
-
-      const email = normalizeEmail(emailRaw);
-      const existing = await prisma.user.findUnique({ where: { email } });
-      if (existing) {
-        return reply.code(409).send({ error: "E-mail já cadastrado" });
-      }
-
-      const passwordHash = await hashPassword(password);
-      const user = await prisma.user.create({
-        data: {
-          name,
-          email,
-          passwordHash,
-        },
-      });
-
-      const [accessToken, refreshToken] = await Promise.all([
-        signAccessToken(user.id, user.email),
-        signRefreshToken(user.id),
-      ]);
-      setAuthCookies(reply, { accessToken, refreshToken });
-
-      return reply.code(201).send({ user: toAuthUser(user) });
     },
   );
 
@@ -87,31 +98,40 @@ export async function authRoutes(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      const emailRaw = request.body?.email ?? "";
-      const password = request.body?.password ?? "";
+      try {
+        const emailRaw = request.body?.email ?? "";
+        const password = request.body?.password ?? "";
 
-      if (!emailRaw || !password) {
-        return reply.code(400).send({ error: "E-mail e senha são obrigatórios" });
+        if (!emailRaw || !password) {
+          return reply
+            .code(400)
+            .send({ error: "E-mail e senha são obrigatórios" });
+        }
+
+        const email = normalizeEmail(emailRaw);
+        const user = await prisma.user.findUnique({ where: { email } });
+        if (!user) {
+          return reply.code(401).send({ error: "Credenciais inválidas" });
+        }
+
+        const ok = await verifyPassword(user.passwordHash, password);
+        if (!ok) {
+          return reply.code(401).send({ error: "Credenciais inválidas" });
+        }
+
+        const [accessToken, refreshToken] = await Promise.all([
+          signAccessToken(user.id, user.email),
+          signRefreshToken(user.id),
+        ]);
+        setAuthCookies(reply, { accessToken, refreshToken });
+
+        return { user: toAuthUser(user) };
+      } catch (err) {
+        request.log.error(err);
+        const message =
+          err instanceof Error ? err.message : "Erro interno no login";
+        return reply.code(500).send({ error: message });
       }
-
-      const email = normalizeEmail(emailRaw);
-      const user = await prisma.user.findUnique({ where: { email } });
-      if (!user) {
-        return reply.code(401).send({ error: "Credenciais inválidas" });
-      }
-
-      const ok = await verifyPassword(user.passwordHash, password);
-      if (!ok) {
-        return reply.code(401).send({ error: "Credenciais inválidas" });
-      }
-
-      const [accessToken, refreshToken] = await Promise.all([
-        signAccessToken(user.id, user.email),
-        signRefreshToken(user.id),
-      ]);
-      setAuthCookies(reply, { accessToken, refreshToken });
-
-      return { user: toAuthUser(user) };
     },
   );
 
