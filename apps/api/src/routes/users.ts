@@ -7,7 +7,29 @@ import {
   unblockUser,
 } from "../services/status.js";
 
+async function blockedIdSet(userId: string) {
+  const blocked = await prisma.userBlock.findMany({
+    where: {
+      OR: [{ blockerId: userId }, { blockedId: userId }],
+    },
+  });
+  return new Set(blocked.flatMap((b) => [b.blockerId, b.blockedId]));
+}
+
 export async function userRoutes(app: FastifyInstance) {
+  app.get("/users", { preHandler: [app.authenticate] }, async (request) => {
+    const blockedIds = await blockedIdSet(request.userId!);
+    const users = await prisma.user.findMany({
+      where: { id: { not: request.userId! } },
+      orderBy: { name: "asc" },
+      take: 1000,
+    });
+
+    return {
+      users: users.filter((u) => !blockedIds.has(u.id)).map(toPublicUser),
+    };
+  });
+
   app.get<{ Querystring: { q?: string } }>(
     "/users/search",
     { preHandler: [app.authenticate] },
@@ -15,17 +37,7 @@ export async function userRoutes(app: FastifyInstance) {
       const q = (request.query.q ?? "").trim();
       if (q.length < 2) return { users: [] };
 
-      const blocked = await prisma.userBlock.findMany({
-        where: {
-          OR: [
-            { blockerId: request.userId! },
-            { blockedId: request.userId! },
-          ],
-        },
-      });
-      const blockedIds = new Set(
-        blocked.flatMap((b) => [b.blockerId, b.blockedId]),
-      );
+      const blockedIds = await blockedIdSet(request.userId!);
 
       const users = await prisma.user.findMany({
         where: {

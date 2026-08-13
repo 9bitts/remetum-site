@@ -21,7 +21,7 @@ import { useAuth } from "./AuthProvider";
 import { ConversationList } from "./ConversationList";
 import { ChatView } from "./ChatView";
 import { NewChatModal } from "./NewChatModal";
-import { StatusTray } from "./StatusTray";
+import { PeopleModal } from "./PeopleModal";
 import { SettingsModal } from "./SettingsModal";
 import { GroupInfoModal } from "./GroupInfoModal";
 import { CallOverlay, type CallUiState } from "./CallOverlay";
@@ -45,6 +45,7 @@ export function ChatShell() {
     Record<string, string[]>
   >({});
   const [newChatOpen, setNewChatOpen] = useState(false);
+  const [peopleOpen, setPeopleOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [groupInfoOpen, setGroupInfoOpen] = useState(false);
   const [mobileShowChat, setMobileShowChat] = useState(false);
@@ -545,7 +546,7 @@ export function ChatShell() {
             </button>
           </div>
         </div>
-        <StatusTray />
+        {/* Status temporariamente fora do ar. Para religar: importar e renderizar <StatusTray />. */}
         <ConversationList
           conversations={conversations}
           currentUserId={user.id}
@@ -555,6 +556,7 @@ export function ChatShell() {
           onSearch={setSearch}
           showArchived={showArchived}
           onToggleArchived={() => setShowArchived((v) => !v)}
+          onOpenPeople={() => setPeopleOpen(true)}
           messageHits={messageHits}
         />
       </aside>
@@ -646,6 +648,18 @@ export function ChatShell() {
       <NewChatModal
         open={newChatOpen}
         onClose={() => setNewChatOpen(false)}
+        onCreated={(conversation) => {
+          setConversations((prev) => {
+            if (prev.some((c) => c.id === conversation.id)) return prev;
+            return [conversation, ...prev];
+          });
+          void selectConversation(conversation.id);
+        }}
+      />
+
+      <PeopleModal
+        open={peopleOpen}
+        onClose={() => setPeopleOpen(false)}
         onCreated={(conversation) => {
           setConversations((prev) => {
             if (prev.some((c) => c.id === conversation.id)) return prev;

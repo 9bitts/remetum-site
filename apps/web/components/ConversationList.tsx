@@ -17,6 +17,7 @@ export function ConversationList({
   onSearch,
   showArchived,
   onToggleArchived,
+  onOpenPeople,
   messageHits,
 }: {
   conversations: ConversationSummary[];
@@ -27,6 +28,7 @@ export function ConversationList({
   onSearch: (value: string) => void;
   showArchived: boolean;
   onToggleArchived: () => void;
+  onOpenPeople: () => void;
   messageHits?: Message[];
 }) {
   const q = search.trim().toLowerCase();
@@ -48,13 +50,22 @@ export function ConversationList({
           placeholder="Buscar conversas e mensagens"
           className="w-full rounded-xl border border-white/10 bg-ebano-bg px-3 py-2 text-sm outline-none focus:border-ebano-accent"
         />
-        <button
-          type="button"
-          onClick={onToggleArchived}
-          className="text-xs text-ebano-muted hover:text-ebano-accent"
-        >
-          {showArchived ? "Ver conversas" : "Ver arquivadas"}
-        </button>
+        <div className="flex items-center justify-between gap-2">
+          <button
+            type="button"
+            onClick={onToggleArchived}
+            className="text-xs text-ebano-muted hover:text-ebano-accent"
+          >
+            {showArchived ? "Ver conversas" : "Ver arquivadas"}
+          </button>
+          <button
+            type="button"
+            onClick={onOpenPeople}
+            className="rounded-xl border border-ebano-accent/70 px-3 py-1.5 text-xs font-medium text-ebano-accent hover:bg-ebano-accent hover:text-ebano-bg"
+          >
+            Ver todas as pessoas
+          </button>
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto px-2 pb-2">
         {messageHits && messageHits.length > 0 ? (
