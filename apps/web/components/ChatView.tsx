@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ConversationSummary, Message } from "@ebano/shared";
 import { Avatar } from "./Avatar";
 import { Composer } from "./Composer";
@@ -84,6 +84,7 @@ export function ChatView({
   const pendingScrollRestore = useRef<number | null>(null);
   const wasLoadingOlder = useRef(false);
   const [muteOpen, setMuteOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const peer = conversationPeer(conversation, currentUserId);
   const title = conversationTitle(conversation, currentUserId);
   const isDirect = conversation.type === "direct";
@@ -121,6 +122,18 @@ export function ChatView({
     wasLoadingOlder.current = Boolean(loadingOlder);
   }, [loadingOlder, messages.length]);
 
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onDocClick(e: MouseEvent) {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("[data-chat-menu]")) return;
+      setMenuOpen(false);
+      setMuteOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [menuOpen]);
+
   function handleScroll() {
     const el = listRef.current;
     if (!el) return;
@@ -132,9 +145,12 @@ export function ChatView({
     }
   }
 
+  const iconBtn =
+    "flex h-9 w-9 items-center justify-center rounded-xl text-ebano-accent hover:bg-white/5";
+
   return (
     <div className="flex h-full flex-col bg-[radial-gradient(ellipse_at_top,_#141418_0%,_#0B0B0D_50%)]">
-      <header className="flex items-center gap-3 border-b border-white/5 px-3 py-3">
+      <header className="flex items-center gap-2 border-b border-white/5 px-3 py-3">
         <button
           type="button"
           onClick={onBack}
@@ -162,139 +178,169 @@ export function ChatView({
             <p className="truncate text-xs text-ebano-muted">{subtitle}</p>
           </div>
         </button>
-        <div className="relative flex flex-wrap justify-end gap-1 text-xs">
+
+        <div className="relative flex shrink-0 items-center gap-0.5" data-chat-menu>
           {isDirect ? (
             <>
               <button
                 type="button"
                 onClick={onCallVoice}
-                className="rounded-lg px-2 py-1 text-ebano-muted hover:bg-white/5"
+                className={iconBtn}
                 title="Chamada de voz"
+                aria-label="Chamada de voz"
               >
-                📞
+                <PhoneIcon />
               </button>
               <button
                 type="button"
                 onClick={onCallVideo}
-                className="rounded-lg px-2 py-1 text-ebano-muted hover:bg-white/5"
+                className={iconBtn}
                 title="Chamada de vídeo"
+                aria-label="Chamada de vídeo"
               >
-                🎥
+                <VideoIcon />
               </button>
             </>
           ) : null}
+
           <button
             type="button"
-            onClick={onTogglePin}
-            className="rounded-lg px-2 py-1 text-ebano-muted hover:bg-white/5"
+            onClick={() => {
+              setMenuOpen((v) => !v);
+              setMuteOpen(false);
+            }}
+            className={iconBtn}
+            title="Mais opções"
+            aria-label="Mais opções"
+            aria-expanded={menuOpen}
           >
-            {conversation.pinnedAt ? "Desafixar" : "Fixar"}
+            <GearIcon />
           </button>
-          <button
-            type="button"
-            onClick={() => setMuteOpen((v) => !v)}
-            className="rounded-lg px-2 py-1 text-ebano-muted hover:bg-white/5"
-          >
-            {conversation.mutedUntil ? "Som" : "Silenciar"}
-          </button>
-          {muteOpen ? (
-            <div className="absolute top-full right-0 z-20 mt-1 min-w-[160px] rounded-xl border border-white/10 bg-ebano-surface p-1 shadow-xl">
-              {conversation.mutedUntil ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMuteOpen(false);
-                    onMute(null);
-                  }}
-                  className="block w-full rounded-lg px-3 py-2 text-left text-ebano-text hover:bg-white/5"
-                >
-                  Ativar som
-                </button>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMuteOpen(false);
-                      onMute(8 * 60);
-                    }}
-                    className="block w-full rounded-lg px-3 py-2 text-left hover:bg-white/5"
-                  >
-                    8 horas
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMuteOpen(false);
-                      onMute(7 * 24 * 60);
-                    }}
-                    className="block w-full rounded-lg px-3 py-2 text-left hover:bg-white/5"
-                  >
-                    1 semana
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMuteOpen(false);
-                      onMute(365 * 24 * 60);
-                    }}
-                    className="block w-full rounded-lg px-3 py-2 text-left hover:bg-white/5"
-                  >
-                    Para sempre
-                  </button>
-                </>
-              )}
-            </div>
-          ) : null}
-          <button
-            type="button"
-            onClick={onClearChat}
-            className="rounded-lg px-2 py-1 text-ebano-muted hover:bg-white/5"
-          >
-            Limpar
-          </button>
-          <button
-            type="button"
-            onClick={onToggleArchive}
-            className="rounded-lg px-2 py-1 text-ebano-muted hover:bg-white/5"
-          >
-            {conversation.archivedAt ? "Desarquivar" : "Arquivar"}
-          </button>
-          {conversation.type === "group" ? (
-            <>
-              <button
-                type="button"
-                onClick={onGroupInfo}
-                className="rounded-lg px-2 py-1 text-ebano-muted hover:bg-white/5"
+
+          {menuOpen ? (
+            <div className="absolute top-full right-0 z-30 mt-2 min-w-[200px] rounded-xl border border-white/10 bg-ebano-surface p-1 shadow-xl">
+              <MenuItem
+                onClick={() => {
+                  setMenuOpen(false);
+                  onTogglePin();
+                }}
               >
-                Grupo
-              </button>
-              <button
-                type="button"
-                onClick={onLeaveGroup}
-                className="rounded-lg px-2 py-1 text-red-300/80 hover:bg-white/5"
+                {conversation.pinnedAt ? "Desafixar" : "Fixar"}
+              </MenuItem>
+
+              <MenuItem
+                onClick={() => setMuteOpen((v) => !v)}
               >
-                Sair
-              </button>
-              {conversation.inviteCode ? (
-                <button
-                  type="button"
-                  onClick={onCopyInvite}
-                  className="rounded-lg px-2 py-1 text-ebano-muted hover:bg-white/5"
-                >
-                  Convite
-                </button>
+                {conversation.mutedUntil ? "Som" : "Silenciar"}
+              </MenuItem>
+
+              {muteOpen ? (
+                <div className="mb-1 ml-2 space-y-0.5 border-l border-white/10 pl-2">
+                  {conversation.mutedUntil ? (
+                    <MenuItem
+                      onClick={() => {
+                        setMuteOpen(false);
+                        setMenuOpen(false);
+                        onMute(null);
+                      }}
+                    >
+                      Ativar som
+                    </MenuItem>
+                  ) : (
+                    <>
+                      <MenuItem
+                        onClick={() => {
+                          setMuteOpen(false);
+                          setMenuOpen(false);
+                          onMute(8 * 60);
+                        }}
+                      >
+                        8 horas
+                      </MenuItem>
+                      <MenuItem
+                        onClick={() => {
+                          setMuteOpen(false);
+                          setMenuOpen(false);
+                          onMute(7 * 24 * 60);
+                        }}
+                      >
+                        1 semana
+                      </MenuItem>
+                      <MenuItem
+                        onClick={() => {
+                          setMuteOpen(false);
+                          setMenuOpen(false);
+                          onMute(365 * 24 * 60);
+                        }}
+                      >
+                        Para sempre
+                      </MenuItem>
+                    </>
+                  )}
+                </div>
               ) : null}
-            </>
-          ) : null}
-          {isDirect ? (
-            <button
-              type="button"
-              onClick={onBlockPeer}
-              className="rounded-lg px-2 py-1 text-red-300/80 hover:bg-white/5"
-            >
-              Bloquear
-            </button>
+
+              <MenuItem
+                onClick={() => {
+                  setMenuOpen(false);
+                  onClearChat();
+                }}
+              >
+                Limpar
+              </MenuItem>
+              <MenuItem
+                onClick={() => {
+                  setMenuOpen(false);
+                  onToggleArchive();
+                }}
+              >
+                {conversation.archivedAt ? "Desarquivar" : "Arquivar"}
+              </MenuItem>
+
+              {conversation.type === "group" ? (
+                <>
+                  <MenuItem
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onGroupInfo();
+                    }}
+                  >
+                    Grupo
+                  </MenuItem>
+                  {conversation.inviteCode ? (
+                    <MenuItem
+                      onClick={() => {
+                        setMenuOpen(false);
+                        onCopyInvite();
+                      }}
+                    >
+                      Convite
+                    </MenuItem>
+                  ) : null}
+                  <MenuItem
+                    danger
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onLeaveGroup();
+                    }}
+                  >
+                    Sair do grupo
+                  </MenuItem>
+                </>
+              ) : null}
+
+              {isDirect ? (
+                <MenuItem
+                  danger
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onBlockPeer();
+                  }}
+                >
+                  Bloquear
+                </MenuItem>
+              ) : null}
+            </div>
           ) : null}
         </div>
       </header>
@@ -333,5 +379,80 @@ export function ChatView({
         onTyping={onTyping}
       />
     </div>
+  );
+}
+
+function MenuItem({
+  children,
+  onClick,
+  danger,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`block w-full rounded-lg px-3 py-2.5 text-left text-sm hover:bg-white/5 ${
+        danger ? "text-red-300" : "text-ebano-text"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function PhoneIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M8.5 4.5c.4-.4 1-.5 1.5-.3l2 1c.5.2.8.7.8 1.2v2.1c0 .4-.2.8-.6 1-.7.5-1.1 1.3-1 2.1.3 2 1.9 3.6 3.9 3.9.8.1 1.6-.3 2.1-1 .2-.4.6-.6 1-.6h2.1c.5 0 1 .3 1.2.8l1 2c.2.5.1 1.1-.3 1.5-1.2 1.2-2.9 1.8-4.6 1.5-4.4-.8-7.9-4.3-8.7-8.7-.3-1.7.3-3.4 1.5-4.6Z"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function VideoIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <rect
+        x="3.5"
+        y="6.5"
+        width="11"
+        height="11"
+        rx="2.2"
+        stroke="currentColor"
+        strokeWidth="1.7"
+      />
+      <path
+        d="M14.5 10.5 20 7.5v9l-5.5-3v-3Z"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function GearIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M12 8.2a3.8 3.8 0 1 0 0 7.6 3.8 3.8 0 0 0 0-7.6Z"
+        stroke="currentColor"
+        strokeWidth="1.7"
+      />
+      <path
+        d="M19.4 13.2a7.8 7.8 0 0 0 .1-1.2 7.8 7.8 0 0 0-.1-1.2l2-1.6-1.9-3.3-2.4.8a7.5 7.5 0 0 0-2.1-1.2L13.5 2h-3l-.5 2.5a7.5 7.5 0 0 0-2.1 1.2l-2.4-.8L3.6 8.2l2 1.6a7.8 7.8 0 0 0-.1 1.2c0 .4 0 .8.1 1.2l-2 1.6 1.9 3.3 2.4-.8c.6.5 1.3.9 2.1 1.2L10.5 22h3l.5-2.5c.8-.3 1.5-.7 2.1-1.2l2.4.8 1.9-3.3-2-1.6Z"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
