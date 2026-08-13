@@ -387,7 +387,7 @@ function MenuItem({
   onClick,
   danger,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   onClick: () => void;
   danger?: boolean;
 }) {
