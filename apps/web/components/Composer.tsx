@@ -189,10 +189,11 @@ export function Composer({
           type="button"
           disabled={disabled || uploading || Boolean(editing)}
           onClick={() => fileRef.current?.click()}
-          className="rounded-xl px-3 py-2 text-ebano-muted hover:bg-ebano-surface hover:text-ebano-accent disabled:opacity-50"
+          className="flex h-[42px] w-[42px] items-center justify-center rounded-xl text-ebano-accent hover:bg-ebano-surface disabled:opacity-50"
           title="Anexar"
+          aria-label="Anexar arquivo"
         >
-          +
+          <PaperclipIcon />
         </button>
         <textarea
           rows={1}
@@ -213,14 +214,15 @@ export function Composer({
             type="button"
             disabled={disabled || uploading}
             onClick={() => void toggleRecording()}
-            className={`rounded-xl px-3 py-2 ${
+            className={`flex h-[42px] w-[42px] items-center justify-center rounded-xl ${
               recording
                 ? "bg-red-500/20 text-red-300"
-                : "text-ebano-muted hover:bg-ebano-surface hover:text-ebano-accent"
+                : "text-ebano-accent hover:bg-ebano-surface"
             }`}
-            title="Áudio"
+            title={recording ? "Parar gravação" : "Áudio"}
+            aria-label={recording ? "Parar gravação" : "Gravar áudio"}
           >
-            {recording ? "■" : "🎤"}
+            {recording ? <StopIcon /> : <MicIcon />}
           </button>
         ) : null}
         <button
@@ -232,5 +234,50 @@ export function Composer({
         </button>
       </form>
     </div>
+  );
+}
+
+function PaperclipIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M21.4 11.6 12.1 20.9a6 6 0 0 1-8.5-8.5l9.9-9.9a4 4 0 0 1 5.7 5.7l-9.9 9.8a2 2 0 1 1-2.8-2.8l8.5-8.4"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function MicIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <rect
+        x="9"
+        y="3"
+        width="6"
+        height="11"
+        rx="3"
+        stroke="currentColor"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M6.5 11a5.5 5.5 0 0 0 11 0M12 16.5V21M9 21h6"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function StopIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <rect x="6" y="6" width="12" height="12" rx="2" />
+    </svg>
   );
 }
