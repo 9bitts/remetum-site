@@ -33,6 +33,15 @@ export type CallUiState =
       message: string;
     };
 
+type CameraFacing = "user" | "environment";
+
+function attachLocalCamera(room: Room, el: HTMLVideoElement | null) {
+  const localVideo = room.localParticipant.getTrackPublication(
+    Track.Source.Camera,
+  )?.videoTrack;
+  if (localVideo && el) localVideo.attach(el);
+}
+
 export function CallOverlay({
   state,
   onAccept,
@@ -49,6 +58,9 @@ export function CallOverlay({
   onDismissError: () => void;
 }) {
   const [connectError, setConnectError] = useState<string | null>(null);
+  const [facing, setFacing] = useState<CameraFacing>("user");
+  const [flipping, setFlipping] = useState(false);
+  const [flipError, setFlipError] = useState<string | null>(null);
   const roomRef = useRef<Room | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -57,6 +69,8 @@ export function CallOverlay({
   useEffect(() => {
     if (!state || state.phase !== "active") {
       setConnectError(null);
+      setFacing("user");
+      setFlipError(null);
       return;
     }
 
@@ -64,6 +78,9 @@ export function CallOverlay({
     const room = new Room({
       adaptiveStream: true,
       dynacast: true,
+      videoCaptureDefaults: {
+        facingMode: "user",
+      },
     });
     roomRef.current = room;
 
@@ -91,14 +108,11 @@ export function CallOverlay({
         }
         await room.localParticipant.setMicrophoneEnabled(true);
         if (state.accepted.video) {
-          await room.localParticipant.setCameraEnabled(true);
+          await room.localParticipant.setCameraEnabled(true, {
+            facingMode: "user",
+          });
         }
-        const localVideo = room.localParticipant.getTrackPublication(
-          Track.Source.Camera,
-        )?.track;
-        if (localVideo && localVideoRef.current) {
-          localVideo.attach(localVideoRef.current);
-        }
+        attachLocalCamera(room, localVideoRef.current);
         for (const participant of room.remoteParticipants.values()) {
           for (const pub of participant.trackPublications.values()) {
             if (pub.track) {
@@ -126,6 +140,50 @@ export function CallOverlay({
       roomRef.current = null;
     };
   }, [state]);
+
+  async function flipCamera() {
+    const room = roomRef.current;
+    if (!room || flipping) return;
+    const next: CameraFacing = facing === "user" ? "environment" : "user";
+    setFlipping(true);
+    setFlipError(null);
+    try {
+      const videoTrack = room.localParticipant.getTrackPublication(
+        Track.Source.Camera,
+      )?.videoTrack;
+      const devices = await Room.getLocalDevices("videoinput");
+      const currentId = videoTrack?.mediaStreamTrack.getSettings().deviceId;
+      const byLabel = devices.find((d) => {
+        const label = d.label.toLowerCase();
+        return next === "user"
+          ? /front|user|facing|frontal|frente/.test(label)
+          : /back|rear|environment|traseira|posterior/.test(label);
+      });
+      const other = devices.find(
+        (d) => d.deviceId && d.deviceId !== currentId,
+      );
+      const options = byLabel?.deviceId
+        ? { deviceId: byLabel.deviceId }
+        : other?.deviceId
+          ? { deviceId: other.deviceId }
+          : { facingMode: next };
+
+      if (videoTrack) {
+        await videoTrack.restartTrack(options);
+      } else {
+        await room.localParticipant.setCameraEnabled(true, options);
+      }
+      if (room.options.videoCaptureDefaults) {
+        room.options.videoCaptureDefaults.facingMode = next;
+      }
+      attachLocalCamera(room, localVideoRef.current);
+      setFacing(next);
+    } catch {
+      setFlipError("Não foi possível virar a câmera neste aparelho");
+    } finally {
+      setFlipping(false);
+    }
+  }
 
   if (!state) return null;
 
@@ -247,25 +305,44 @@ export function CallOverlay({
             autoPlay
             playsInline
             muted
-            className="absolute right-4 bottom-4 h-36 w-28 rounded-xl border border-white/10 object-cover shadow-xl"
+            className={`absolute right-4 bottom-4 h-36 w-28 rounded-xl border border-white/10 object-cover shadow-xl ${
+              facing === "user" ? "-scale-x-100" : ""
+            }`}
           />
         ) : null}
       </div>
 
-      <div className="flex items-center justify-between border-t border-white/5 px-4 py-4">
-        <div>
-          <p className="text-xs tracking-[0.2em] text-[#C9A227] uppercase">
-            Remetum
-          </p>
-          <p className="text-sm text-[#F2F2F0]">{state.peerName}</p>
+      <div className="border-t border-white/5 px-4 py-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs tracking-[0.2em] text-[#C9A227] uppercase">
+              Remetum
+            </p>
+            <p className="text-sm text-[#F2F2F0]">{state.peerName}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            {video ? (
+              <button
+                type="button"
+                disabled={flipping}
+                onClick={() => void flipCamera()}
+                className="rounded-xl border border-[#C9A227]/70 px-4 py-2.5 text-sm font-medium text-[#C9A227] hover:bg-[#C9A227] hover:text-[#0B0B0D] disabled:opacity-60"
+              >
+                {flipping ? "Trocando…" : "Virar câmera"}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={onHangup}
+              className="rounded-xl bg-red-500 px-5 py-2.5 text-sm font-medium text-white"
+            >
+              Encerrar
+            </button>
+          </div>
         </div>
-        <button
-          type="button"
-          onClick={onHangup}
-          className="rounded-xl bg-red-500 px-5 py-2.5 text-sm font-medium text-white"
-        >
-          Encerrar
-        </button>
+        {flipError ? (
+          <p className="mt-2 text-right text-xs text-red-300">{flipError}</p>
+        ) : null}
       </div>
 
       {connectError ? (
