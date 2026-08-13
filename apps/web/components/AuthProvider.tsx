@@ -11,7 +11,7 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import type { AuthResponse, AuthUser } from "@ebano/shared";
-import { api, ApiError } from "@/lib/api";
+import { api } from "@/lib/api";
 import { connectSocket, disconnectSocket } from "@/lib/socket";
 
 type AuthContextValue = {
