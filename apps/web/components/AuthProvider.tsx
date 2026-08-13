@@ -37,7 +37,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       setUser(null);
       disconnectSocket();
-      if (err instanceof ApiError && err.status === 401) {
+      // 401/403 or network: never stay stuck on "Carregando…"
+      if (
+        !(err instanceof ApiError) ||
+        err.status === 401 ||
+        err.status === 403
+      ) {
+        router.replace("/login");
+      } else {
         router.replace("/login");
       }
     } finally {
