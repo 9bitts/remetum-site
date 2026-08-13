@@ -60,6 +60,31 @@ export function SettingsModal({
     }
   }
 
+  async function testLivekit() {
+    setLivekitStatus("Testando…");
+    setError(null);
+    try {
+      const res = await api<{
+        ok: boolean;
+        url?: string | null;
+        keyPrefix?: string | null;
+        keyLength?: number;
+        secretLength?: number;
+        error?: string;
+      }>("/calls/self-test");
+      if (res.ok) {
+        setLivekitStatus(
+          `OK · ${res.keyPrefix}… · key ${res.keyLength} · secret ${res.secretLength}`,
+        );
+      } else {
+        setLivekitStatus(`Falha: ${res.error ?? "credenciais inválidas"}`);
+      }
+    } catch (err) {
+      setLivekitStatus(null);
+      setError(err instanceof Error ? err.message : "Falha no self-test");
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center">
       <div className="max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-[var(--radius-ebano)] bg-ebano-surface p-4 shadow-xl">
@@ -102,10 +127,26 @@ export function SettingsModal({
           type="button"
           disabled={saving || name.trim().length < 2}
           onClick={() => void saveProfile()}
-          className="mb-6 w-full rounded-xl bg-ebano-accent py-2.5 text-sm font-medium text-ebano-bg disabled:opacity-60"
+          className="mb-4 w-full rounded-xl bg-ebano-accent py-2.5 text-sm font-medium text-ebano-bg disabled:opacity-60"
         >
           {saving ? "Salvando…" : "Salvar perfil"}
         </button>
+
+        <h3 className="mb-2 text-sm font-medium text-ebano-accent">Chamadas</h3>
+        <button
+          type="button"
+          onClick={() => void testLivekit()}
+          className="mb-2 w-full rounded-xl border border-white/10 py-2.5 text-sm text-ebano-text hover:bg-white/5"
+        >
+          Testar LiveKit
+        </button>
+        {livekitStatus ? (
+          <p className="mb-6 text-xs text-ebano-muted">{livekitStatus}</p>
+        ) : (
+          <p className="mb-6 text-xs text-ebano-muted">
+            Verifica se LIVEKIT_* no Railway está correto.
+          </p>
+        )}
 
         <h3 className="mb-2 text-sm font-medium text-ebano-accent">
           Usuários bloqueados
