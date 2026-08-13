@@ -44,7 +44,13 @@ Variáveis:
 NEXT_PUBLIC_API_URL=https://api.remetum.com
 ```
 
+O web chama a API em same-origin via `/backend/*` (rewrite do Next).  
+`NEXT_PUBLIC_API_URL` ainda é necessário para o rewrite e para o Socket.IO.
+
 Domínios do web: `remetum.com` e `www.remetum.com`.
+
+Na API, cookies usam `Domain=.remetum.com` automaticamente (ou `COOKIE_DOMAIN`).  
+Depois desse deploy, **faça login de novo** (cookies antigos eram só de `api.`).
 
 ## 4) DNS / Cloudflare
 

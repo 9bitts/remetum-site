@@ -11,13 +11,31 @@ const defaultOrigins = [
   "https://www.remetum.com",
 ];
 
+const publicApiUrl = process.env.PUBLIC_API_URL ?? "http://localhost:4000";
+
+function resolveCookieDomain(): string | undefined {
+  if (process.env.COOKIE_DOMAIN) {
+    return process.env.COOKIE_DOMAIN === "none"
+      ? undefined
+      : process.env.COOKIE_DOMAIN;
+  }
+  try {
+    const host = new URL(publicApiUrl).hostname;
+    if (host === "localhost" || host.endsWith(".localhost")) return undefined;
+    const parts = host.split(".");
+    if (parts.length >= 2) return `.${parts.slice(-2).join(".")}`;
+  } catch {
+    // ignore
+  }
+  return undefined;
+}
+
 export const config = {
   port: Number(process.env.PORT ?? 4000),
   corsOrigins: parseCorsOrigins(
     process.env.CORS_ORIGIN ?? defaultOrigins.join(","),
   ),
-  publicApiUrl:
-    process.env.PUBLIC_API_URL ?? "http://localhost:4000",
+  publicApiUrl,
   jwtSecret: process.env.JWT_SECRET ?? "dev-jwt-secret-change-me",
   jwtRefreshSecret:
     process.env.JWT_REFRESH_SECRET ?? "dev-refresh-secret-change-me",
@@ -26,11 +44,11 @@ export const config = {
   cookie: {
     access: "ebano_access",
     refresh: "ebano_refresh",
-    // Cross-subdomain (remetum.com → api.remetum.com) needs Secure in prod HTTPS
+    domain: resolveCookieDomain(),
     secure:
       process.env.COOKIE_SECURE === "true" ||
       process.env.NODE_ENV === "production" ||
-      (process.env.PUBLIC_API_URL ?? "").startsWith("https://"),
+      publicApiUrl.startsWith("https://"),
     sameSite: "lax" as const,
     path: "/",
   },

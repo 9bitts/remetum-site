@@ -1,31 +1,39 @@
 import type { FastifyReply } from "fastify";
 import { config } from "../config.js";
 
+function cookieBase() {
+  const { cookie } = config;
+  return {
+    path: cookie.path,
+    secure: cookie.secure,
+    sameSite: cookie.sameSite,
+    ...(cookie.domain ? { domain: cookie.domain } : {}),
+  };
+}
+
 export function setAuthCookies(
   reply: FastifyReply,
   tokens: { accessToken: string; refreshToken: string },
 ) {
   const { cookie } = config;
+  const base = cookieBase();
 
   reply.setCookie(cookie.access, tokens.accessToken, {
+    ...base,
     httpOnly: true,
-    secure: cookie.secure,
-    sameSite: cookie.sameSite,
-    path: cookie.path,
     maxAge: config.accessTokenTtlSeconds,
   });
 
   reply.setCookie(cookie.refresh, tokens.refreshToken, {
+    ...base,
     httpOnly: true,
-    secure: cookie.secure,
-    sameSite: cookie.sameSite,
-    path: cookie.path,
     maxAge: config.refreshTokenTtlSeconds,
   });
 }
 
 export function clearAuthCookies(reply: FastifyReply) {
   const { cookie } = config;
-  reply.clearCookie(cookie.access, { path: cookie.path });
-  reply.clearCookie(cookie.refresh, { path: cookie.path });
+  const base = cookieBase();
+  reply.clearCookie(cookie.access, base);
+  reply.clearCookie(cookie.refresh, base);
 }

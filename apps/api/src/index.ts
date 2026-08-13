@@ -22,8 +22,26 @@ async function main() {
   const app = Fastify({ logger: true });
 
   await app.register(cors, {
-    origin: config.corsOrigins,
+    origin: (origin, cb) => {
+      if (!origin) {
+        cb(null, true);
+        return;
+      }
+      if (config.corsOrigins.includes(origin)) {
+        cb(null, origin);
+        return;
+      }
+      cb(null, false);
+    },
     credentials: true,
+    methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "Accept",
+    ],
+    maxAge: 86400,
   });
 
   await app.register(cookie);

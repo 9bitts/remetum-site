@@ -1,11 +1,11 @@
 import { io, type Socket } from "socket.io-client";
-import { API_URL } from "./config";
+import { SOCKET_URL } from "./config";
 
 let socket: Socket | null = null;
 
 export function getSocket() {
   if (!socket) {
-    socket = io(API_URL, {
+    socket = io(SOCKET_URL, {
       withCredentials: true,
       autoConnect: false,
       transports: ["websocket", "polling"],
