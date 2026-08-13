@@ -21,6 +21,7 @@ export function SettingsModal({
   const [blocked, setBlocked] = useState<PublicUser[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [livekitStatus, setLivekitStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
