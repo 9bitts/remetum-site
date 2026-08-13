@@ -2,6 +2,7 @@
 
 import type { Message } from "@ebano/shared";
 import { formatTime } from "@/lib/format";
+import { mediaSrc } from "@/lib/media";
 
 const QUICK_REACTIONS = ["❤️", "👍", "😂", "😮", "😢", "🙏"];
 
@@ -57,7 +58,7 @@ export function MessageBubble({
           {message.type === "image" && message.mediaUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              src={message.mediaUrl}
+              src={mediaSrc(message.mediaUrl)}
               alt={message.content ?? "imagem"}
               className="mb-1 max-h-64 rounded-xl object-cover"
             />
@@ -65,19 +66,19 @@ export function MessageBubble({
 
           {message.type === "video" && message.mediaUrl ? (
             <video
-              src={message.mediaUrl}
+              src={mediaSrc(message.mediaUrl)}
               controls
               className="mb-1 max-h-64 rounded-xl"
             />
           ) : null}
 
           {message.type === "audio" && message.mediaUrl ? (
-            <audio src={message.mediaUrl} controls className="mb-1 w-56" />
+            <audio src={mediaSrc(message.mediaUrl)} controls className="mb-1 w-56" />
           ) : null}
 
           {message.type === "file" && message.mediaUrl ? (
             <a
-              href={message.mediaUrl}
+              href={mediaSrc(message.mediaUrl)}
               target="_blank"
               rel="noreferrer"
               className="mb-1 block text-sm text-ebano-accent underline"

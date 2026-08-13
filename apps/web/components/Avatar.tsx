@@ -1,5 +1,8 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { mediaSrc } from "@/lib/media";
+
 type AvatarProps = {
   name: string;
   url?: string | null;
@@ -8,6 +11,13 @@ type AvatarProps = {
 };
 
 export function Avatar({ name, url, online, size = "md" }: AvatarProps) {
+  const src = mediaSrc(url);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
+
   const dim =
     size === "sm"
       ? "h-9 w-9 text-xs"
@@ -22,21 +32,26 @@ export function Avatar({ name, url, online, size = "md" }: AvatarProps) {
     .map((p) => p[0]?.toUpperCase() ?? "")
     .join("");
 
+  const fallback = (
+    <div
+      className={`${dim} flex items-center justify-center rounded-full bg-ebano-surface text-ebano-accent ring-1 ring-ebano-accent/50`}
+    >
+      {initials || "?"}
+    </div>
+  );
+
   return (
     <div className="relative shrink-0">
-      {url ? (
+      {src && !failed ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={url}
+          src={src}
           alt={name}
+          onError={() => setFailed(true)}
           className={`${dim} rounded-full object-cover ring-1 ring-ebano-accent/40`}
         />
       ) : (
-        <div
-          className={`${dim} flex items-center justify-center rounded-full bg-ebano-surface text-ebano-accent ring-1 ring-ebano-accent/50`}
-        >
-          {initials || "?"}
-        </div>
+        fallback
       )}
       {online ? (
         <span

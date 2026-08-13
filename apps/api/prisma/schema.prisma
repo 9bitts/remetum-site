@@ -182,6 +182,15 @@ model StatusView {
   @@map("status_views")
 }
 
+model StoredFile {
+  id        String   @id @default(cuid())
+  mimeType  String   @map("mime_type")
+  data      Bytes
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("stored_files")
+}
+
 model PushSubscription {
   id        String   @id @default(cuid())
   userId    String   @map("user_id")

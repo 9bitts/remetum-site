@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { access } from "node:fs/promises";
 import path from "node:path";
+import type { FastifyReply } from "fastify";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { prisma } from "../prisma.js";
 import { config, r2Enabled } from "../config.js";
 
 const uploadsDir = path.resolve(process.cwd(), "uploads");
@@ -55,13 +58,45 @@ export async function storeUpload(input: {
     };
   }
 
-  await mkdir(path.join(uploadsDir, path.dirname(key)), { recursive: true });
-  await writeFile(path.join(uploadsDir, key), input.buffer);
+  const stored = await prisma.storedFile.create({
+    data: {
+      mimeType: input.mimeType,
+      data: new Uint8Array(input.buffer),
+    },
+  });
   return {
-    url: `${config.publicApiUrl}/media/${key}`,
-    key,
+    url: `${config.publicApiUrl}/media/${stored.id}`,
+    key: stored.id,
     mimeType: input.mimeType,
   };
+}
+
+function applyMediaHeaders(reply: FastifyReply, mimeType: string) {
+  reply
+    .type(mimeType)
+    .header("Cache-Control", "public, max-age=31536000, immutable")
+    .header("Cross-Origin-Resource-Policy", "cross-origin");
+}
+
+export async function sendMedia(id: string, reply: FastifyReply) {
+  if (!id || id.includes("..")) {
+    return reply.code(400).send({ error: "Arquivo inválido" });
+  }
+
+  const stored = await prisma.storedFile.findUnique({ where: { id } });
+  if (stored) {
+    applyMediaHeaders(reply, stored.mimeType);
+    return reply.send(Buffer.from(stored.data));
+  }
+
+  const diskPath = path.join(uploadsDir, id);
+  try {
+    await access(diskPath);
+    applyMediaHeaders(reply, mimeFromExt(path.extname(diskPath)));
+    return reply.send(createReadStream(diskPath));
+  } catch {
+    return reply.code(404).send({ error: "Arquivo não encontrado" });
+  }
 }
 
 function mimeToExt(mime: string) {
@@ -94,6 +129,38 @@ function mimeToExt(mime: string) {
       return ".zip";
     default:
       return "";
+  }
+}
+
+function mimeFromExt(ext: string) {
+  switch (ext.toLowerCase()) {
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".png":
+      return "image/png";
+    case ".webp":
+      return "image/webp";
+    case ".gif":
+      return "image/gif";
+    case ".webm":
+      return "video/webm";
+    case ".mp4":
+      return "video/mp4";
+    case ".mp3":
+      return "audio/mpeg";
+    case ".m4a":
+      return "audio/mp4";
+    case ".ogg":
+      return "audio/ogg";
+    case ".wav":
+      return "audio/wav";
+    case ".pdf":
+      return "application/pdf";
+    case ".zip":
+      return "application/zip";
+    default:
+      return "application/octet-stream";
   }
 }
 

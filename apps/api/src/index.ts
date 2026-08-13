@@ -2,7 +2,6 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
-import fastifyStatic from "@fastify/static";
 import authPlugin from "./plugins/auth.js";
 import { healthRoutes } from "./routes/health.js";
 import { authRoutes } from "./routes/auth.js";
@@ -11,12 +10,11 @@ import { messageRoutes } from "./routes/messages.js";
 import { callRoutes } from "./routes/calls.js";
 import { userRoutes } from "./routes/users.js";
 import { uploadRoutes } from "./routes/uploads.js";
+import { mediaRoutes } from "./routes/media.js";
 import { pushRoutes } from "./routes/push.js";
 import { statusRoutes } from "./routes/status.js";
 import { createSocketServer } from "./sockets/index.js";
 import { config } from "./config.js";
-import { getUploadsDir } from "./services/uploads.js";
-import { mkdir } from "node:fs/promises";
 
 async function main() {
   const app = Fastify({ logger: true });
@@ -50,20 +48,13 @@ async function main() {
   });
   await app.register(authPlugin);
 
-  const uploadsDir = getUploadsDir();
-  await mkdir(uploadsDir, { recursive: true });
-  await app.register(fastifyStatic, {
-    root: uploadsDir,
-    prefix: "/media/",
-    decorateReply: false,
-  });
-
   await app.register(healthRoutes);
   await app.register(authRoutes);
   await app.register(conversationRoutes);
   await app.register(messageRoutes);
   await app.register(callRoutes);
   await app.register(userRoutes);
+  await app.register(mediaRoutes);
   await app.register(uploadRoutes);
   await app.register(pushRoutes);
   await app.register(statusRoutes);
