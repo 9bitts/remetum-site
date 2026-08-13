@@ -38,6 +38,7 @@ export const config = {
     maxBytes: 25 * 1024 * 1024,
     allowedMime: [
       "image/jpeg",
+      "image/jpg",
       "image/png",
       "image/webp",
       "image/gif",

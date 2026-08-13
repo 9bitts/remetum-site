@@ -6,6 +6,26 @@ import { api } from "@/lib/api";
 import { API_URL } from "@/lib/config";
 import { Avatar } from "./Avatar";
 
+async function fileToJpegBlob(file: File, maxSize = 1024): Promise<Blob> {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxSize / Math.max(bitmap.width, bitmap.height));
+  const width = Math.max(1, Math.round(bitmap.width * scale));
+  const height = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Não foi possível processar a imagem");
+  ctx.drawImage(bitmap, 0, 0, width, height);
+  bitmap.close();
+
+  const blob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob((b) => resolve(b), "image/jpeg", 0.88),
+  );
+  if (!blob) throw new Error("Não foi possível converter a imagem");
+  return blob;
+}
+
 export function SettingsModal({
   open,
   onClose,
@@ -40,24 +60,37 @@ export function SettingsModal({
   if (!open) return null;
 
   async function onPickPhoto(file: File) {
-    if (!file.type.startsWith("image/")) {
-      setError("Envie uma imagem (JPG, PNG, WebP…)");
-      return;
-    }
     setUploading(true);
     setError(null);
     try {
+      let uploadBlob: Blob;
+      let filename = file.name || "avatar.jpg";
+      try {
+        uploadBlob = await fileToJpegBlob(file);
+        filename = filename.replace(/\.[^.]+$/, "") + ".jpg";
+      } catch {
+        if (!file.type.startsWith("image/")) {
+          throw new Error("Envie uma imagem (JPG, PNG, WebP…)");
+        }
+        uploadBlob = file;
+      }
+
       const form = new FormData();
-      form.append("file", file);
+      form.append("file", uploadBlob, filename);
+
       const upload = await fetch(`${API_URL}/uploads`, {
         method: "POST",
         credentials: "include",
         body: form,
       });
-      const data = (await upload.json()) as { url?: string; error?: string };
+      const data = (await upload.json().catch(() => ({}))) as {
+        url?: string;
+        error?: string;
+      };
       if (!upload.ok || !data.url) {
-        throw new Error(data.error ?? "Falha no upload");
+        throw new Error(data.error ?? `Falha no upload (${upload.status})`);
       }
+
       const res = await api<{ user: AuthUser }>("/users/me", {
         method: "PATCH",
         body: { avatarUrl: data.url },
@@ -65,7 +98,13 @@ export function SettingsModal({
       setAvatarUrl(res.user.avatarUrl);
       onUserUpdated(res.user);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao enviar foto");
+      const message =
+        err instanceof TypeError
+          ? "Não foi possível conectar à API. Confira a rede e tente de novo."
+          : err instanceof Error
+            ? err.message
+            : "Falha ao enviar foto";
+      setError(message);
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = "";
@@ -131,7 +170,8 @@ export function SettingsModal({
         <input
           ref={fileRef}
           type="file"
-          accept="image/*"
+          accept="image/*,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+          capture="user"
           className="hidden"
           onChange={(e) => {
             const file = e.target.files?.[0];
