@@ -9,6 +9,50 @@ import { config, r2Enabled } from "../config.js";
 
 const uploadsDir = path.resolve(process.cwd(), "uploads");
 
+const MIME_ALIASES: Record<string, string> = {
+  "image/jpg": "image/jpeg",
+  "audio/x-m4a": "audio/mp4",
+  "audio/x-wav": "audio/wav",
+  "application/x-zip-compressed": "application/zip",
+  "application/x-zip": "application/zip",
+};
+
+const EXT_MIME: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".heic": "image/heic",
+  ".heif": "image/heif",
+  ".avif": "image/avif",
+  ".bmp": "image/bmp",
+  ".webm": "video/webm",
+  ".mp4": "video/mp4",
+  ".mov": "video/quicktime",
+  ".3gp": "video/3gpp",
+  ".mp3": "audio/mpeg",
+  ".m4a": "audio/mp4",
+  ".ogg": "audio/ogg",
+  ".wav": "audio/wav",
+  ".aac": "audio/aac",
+  ".pdf": "application/pdf",
+  ".txt": "text/plain",
+  ".csv": "text/csv",
+  ".rtf": "application/rtf",
+  ".doc": "application/msword",
+  ".docx":
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".xls": "application/vnd.ms-excel",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".ppt": "application/vnd.ms-powerpoint",
+  ".pptx":
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".odt": "application/vnd.oasis.opendocument.text",
+  ".ods": "application/vnd.oasis.opendocument.spreadsheet",
+  ".zip": "application/zip",
+};
+
 function getS3() {
   return new S3Client({
     region: "auto",
@@ -20,12 +64,42 @@ function getS3() {
   });
 }
 
+function isGenericMime(mime: string) {
+  return (
+    !mime ||
+    mime === "application/octet-stream" ||
+    mime === "binary/octet-stream"
+  );
+}
+
+export function resolveUploadMime(mimeType: string, filename: string) {
+  const raw = (mimeType || "").split(";")[0].trim().toLowerCase();
+  const aliased = MIME_ALIASES[raw] ?? raw;
+  const fromExt = EXT_MIME[path.extname(filename).toLowerCase()];
+
+  if (!isGenericMime(aliased) && config.upload.allowedMime.includes(aliased)) {
+    return aliased;
+  }
+  if (fromExt) return fromExt;
+  return aliased;
+}
+
+function mediaKind(
+  mimeType: string,
+): "image" | "file" | "audio" | "video" {
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("audio/")) return "audio";
+  if (mimeType.startsWith("video/")) return "video";
+  return "file";
+}
+
 export async function storeUpload(input: {
   buffer: Buffer;
   mimeType: string;
   filename: string;
 }) {
-  if (!config.upload.allowedMime.includes(input.mimeType)) {
+  const mimeType = resolveUploadMime(input.mimeType, input.filename);
+  if (!config.upload.allowedMime.includes(mimeType)) {
     throw Object.assign(new Error("Tipo de arquivo não permitido"), {
       statusCode: 400,
     });
@@ -36,39 +110,53 @@ export async function storeUpload(input: {
     });
   }
 
-  const ext = path.extname(input.filename) || mimeToExt(input.mimeType);
+  const ext = path.extname(input.filename) || mimeToExt(mimeType);
   const key = `${new Date().toISOString().slice(0, 10)}/${randomUUID()}${ext}`;
 
   if (r2Enabled()) {
-    await getS3().send(
-      new PutObjectCommand({
-        Bucket: config.r2.bucket,
-        Key: key,
-        Body: input.buffer,
-        ContentType: input.mimeType,
-      }),
-    );
-    const base =
-      config.r2.publicBaseUrl ||
-      `https://${config.r2.bucket}.${config.r2.accountId}.r2.cloudflarestorage.com`;
-    return {
-      url: `${base.replace(/\/$/, "")}/${key}`,
-      key,
-      mimeType: input.mimeType,
-    };
+    try {
+      await getS3().send(
+        new PutObjectCommand({
+          Bucket: config.r2.bucket,
+          Key: key,
+          Body: input.buffer,
+          ContentType: mimeType,
+        }),
+      );
+      const base =
+        config.r2.publicBaseUrl ||
+        `https://${config.r2.bucket}.${config.r2.accountId}.r2.cloudflarestorage.com`;
+      return {
+        url: `${base.replace(/\/$/, "")}/${key}`,
+        key,
+        mimeType,
+        type: mediaKind(mimeType),
+      };
+    } catch (err) {
+      console.error("R2 upload failed, falling back to database", err);
+    }
   }
 
-  const stored = await prisma.storedFile.create({
-    data: {
-      mimeType: input.mimeType,
-      data: new Uint8Array(input.buffer),
-    },
-  });
-  return {
-    url: `${config.publicApiUrl}/media/${stored.id}`,
-    key: stored.id,
-    mimeType: input.mimeType,
-  };
+  try {
+    const stored = await prisma.storedFile.create({
+      data: {
+        mimeType,
+        data: new Uint8Array(input.buffer),
+      },
+    });
+    return {
+      url: `${config.publicApiUrl}/media/${stored.id}`,
+      key: stored.id,
+      mimeType,
+      type: mediaKind(mimeType),
+    };
+  } catch (err) {
+    console.error("Failed to persist upload", err);
+    throw Object.assign(
+      new Error("Não foi possível salvar o arquivo. Tente um arquivo menor."),
+      { statusCode: 500 },
+    );
+  }
 }
 
 function applyMediaHeaders(reply: FastifyReply, mimeType: string) {
@@ -109,6 +197,14 @@ function mimeToExt(mime: string) {
       return ".webp";
     case "image/gif":
       return ".gif";
+    case "image/heic":
+      return ".heic";
+    case "image/heif":
+      return ".heif";
+    case "image/avif":
+      return ".avif";
+    case "image/bmp":
+      return ".bmp";
     case "audio/webm":
       return ".webm";
     case "audio/ogg":
@@ -119,49 +215,43 @@ function mimeToExt(mime: string) {
       return ".m4a";
     case "audio/wav":
       return ".wav";
+    case "audio/aac":
+      return ".aac";
     case "video/mp4":
       return ".mp4";
     case "video/webm":
       return ".webm";
+    case "video/quicktime":
+      return ".mov";
     case "application/pdf":
       return ".pdf";
     case "application/zip":
       return ".zip";
+    case "text/plain":
+      return ".txt";
+    case "text/csv":
+      return ".csv";
+    case "application/rtf":
+      return ".rtf";
+    case "application/msword":
+      return ".doc";
+    case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+      return ".docx";
+    case "application/vnd.ms-excel":
+      return ".xls";
+    case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+      return ".xlsx";
+    case "application/vnd.ms-powerpoint":
+      return ".ppt";
+    case "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+      return ".pptx";
     default:
       return "";
   }
 }
 
 function mimeFromExt(ext: string) {
-  switch (ext.toLowerCase()) {
-    case ".jpg":
-    case ".jpeg":
-      return "image/jpeg";
-    case ".png":
-      return "image/png";
-    case ".webp":
-      return "image/webp";
-    case ".gif":
-      return "image/gif";
-    case ".webm":
-      return "video/webm";
-    case ".mp4":
-      return "video/mp4";
-    case ".mp3":
-      return "audio/mpeg";
-    case ".m4a":
-      return "audio/mp4";
-    case ".ogg":
-      return "audio/ogg";
-    case ".wav":
-      return "audio/wav";
-    case ".pdf":
-      return "application/pdf";
-    case ".zip":
-      return "application/zip";
-    default:
-      return "application/octet-stream";
-  }
+  return EXT_MIME[ext.toLowerCase()] ?? "application/octet-stream";
 }
 
 export function getUploadsDir() {

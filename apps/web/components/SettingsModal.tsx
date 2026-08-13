@@ -3,28 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { AuthUser, PublicUser } from "@ebano/shared";
 import { api } from "@/lib/api";
-import { API_URL } from "@/lib/config";
+import { uploadMedia } from "@/lib/upload";
 import { Avatar } from "./Avatar";
-
-async function fileToJpegBlob(file: File, maxSize = 1024): Promise<Blob> {
-  const bitmap = await createImageBitmap(file);
-  const scale = Math.min(1, maxSize / Math.max(bitmap.width, bitmap.height));
-  const width = Math.max(1, Math.round(bitmap.width * scale));
-  const height = Math.max(1, Math.round(bitmap.height * scale));
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Não foi possível processar a imagem");
-  ctx.drawImage(bitmap, 0, 0, width, height);
-  bitmap.close();
-
-  const blob = await new Promise<Blob | null>((resolve) =>
-    canvas.toBlob((b) => resolve(b), "image/jpeg", 0.88),
-  );
-  if (!blob) throw new Error("Não foi possível converter a imagem");
-  return blob;
-}
 
 export function SettingsModal({
   open,
@@ -63,33 +43,10 @@ export function SettingsModal({
     setUploading(true);
     setError(null);
     try {
-      let uploadBlob: Blob;
-      let filename = file.name || "avatar.jpg";
-      try {
-        uploadBlob = await fileToJpegBlob(file);
-        filename = filename.replace(/\.[^.]+$/, "") + ".jpg";
-      } catch {
-        if (!file.type.startsWith("image/")) {
-          throw new Error("Envie uma imagem (JPG, PNG, WebP…)");
-        }
-        uploadBlob = file;
+      if (!file.type.startsWith("image/") && !/\.(jpe?g|png|webp|gif|heic|heif|avif|bmp)$/i.test(file.name)) {
+        throw new Error("Envie uma imagem (JPG, PNG, WebP…)");
       }
-
-      const form = new FormData();
-      form.append("file", uploadBlob, filename);
-
-      const upload = await fetch(`${API_URL}/uploads`, {
-        method: "POST",
-        credentials: "include",
-        body: form,
-      });
-      const data = (await upload.json().catch(() => ({}))) as {
-        url?: string;
-        error?: string;
-      };
-      if (!upload.ok || !data.url) {
-        throw new Error(data.error ?? `Falha no upload (${upload.status})`);
-      }
+      const data = await uploadMedia(file, { imageMaxSize: 1024 });
 
       const res = await api<{ user: AuthUser }>("/users/me", {
         method: "PATCH",

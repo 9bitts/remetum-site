@@ -3,7 +3,7 @@
 import type { FormEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import type { Message } from "@ebano/shared";
-import { API_URL } from "@/lib/config";
+import { uploadMedia } from "@/lib/upload";
 
 export function Composer({
   disabled,
@@ -31,6 +31,7 @@ export function Composer({
   const [text, setText] = useState("");
   const [uploading, setUploading] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const typingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mediaRecorder = useRef<MediaRecorder | null>(null);
@@ -62,23 +63,10 @@ export function Composer({
   }
 
   async function onFile(file: File) {
+    setError(null);
     setUploading(true);
     try {
-      const form = new FormData();
-      form.append("file", file);
-      const res = await fetch(`${API_URL}/uploads`, {
-        method: "POST",
-        credentials: "include",
-        body: form,
-      });
-      const data = (await res.json()) as {
-        error?: string;
-        url?: string;
-        type?: "image" | "file" | "audio" | "video";
-      };
-      if (!res.ok || !data.url || !data.type) {
-        throw new Error(data.error ?? "Falha no upload");
-      }
+      const data = await uploadMedia(file);
       onSend({
         type: data.type,
         mediaUrl: data.url,
@@ -86,7 +74,7 @@ export function Composer({
         replyToId: replyTo?.id,
       });
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Upload falhou");
+      setError(err instanceof Error ? err.message : "Upload falhou");
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = "";
@@ -114,21 +102,10 @@ export function Composer({
           type: "audio/webm",
         });
         const durationMs = Date.now() - recordStartedAt.current;
+        setError(null);
         setUploading(true);
         try {
-          const form = new FormData();
-          form.append("file", file);
-          const res = await fetch(`${API_URL}/uploads`, {
-            method: "POST",
-            credentials: "include",
-            body: form,
-          });
-          const data = (await res.json()) as {
-            error?: string;
-            url?: string;
-            type?: "audio";
-          };
-          if (!res.ok || !data.url) throw new Error(data.error ?? "Falha no áudio");
+          const data = await uploadMedia(file);
           onSend({
             type: "audio",
             mediaUrl: data.url,
@@ -136,7 +113,7 @@ export function Composer({
             replyToId: replyTo?.id,
           });
         } catch (err) {
-          alert(err instanceof Error ? err.message : "Áudio falhou");
+          setError(err instanceof Error ? err.message : "Áudio falhou");
         } finally {
           setUploading(false);
         }
@@ -145,7 +122,7 @@ export function Composer({
       recorder.start();
       setRecording(true);
     } catch {
-      alert("Permissão de microfone negada");
+      setError("Permissão de microfone negada");
     }
   }
 
@@ -174,12 +151,19 @@ export function Composer({
           </button>
         </div>
       ) : null}
+      {error ? (
+        <div className="flex items-center justify-between gap-3 px-3 pt-2 text-xs text-red-300">
+          <span>{error}</span>
+          <button type="button" onClick={() => setError(null)} aria-label="Fechar aviso">
+            ✕
+          </button>
+        </div>
+      ) : null}
       <form onSubmit={submit} className="flex items-end gap-2 px-3 py-3">
         <input
           ref={fileRef}
           type="file"
           className="hidden"
-          accept="image/*,video/*,audio/*,.pdf,.txt,.zip"
           onChange={(e) => {
             const file = e.target.files?.[0];
             if (file) void onFile(file);

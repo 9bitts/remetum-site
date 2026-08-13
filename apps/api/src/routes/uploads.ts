@@ -5,41 +5,56 @@ import { config } from "../config.js";
 
 export async function uploadRoutes(app: FastifyInstance) {
   await app.register(multipart, {
-    limits: { fileSize: config.upload.maxBytes },
+    limits: {
+      fileSize: config.upload.maxBytes,
+      files: 1,
+      fields: 10,
+    },
+    throwFileSizeLimit: true,
   });
 
   app.post(
     "/uploads",
     { preHandler: [app.authenticate] },
     async (request, reply) => {
-      const file = await request.file();
-      if (!file) {
-        return reply.code(400).send({ error: "Arquivo obrigatório" });
-      }
-
-      const buffer = await file.toBuffer();
       try {
+        const file = await request.file();
+        if (!file) {
+          return reply.code(400).send({ error: "Arquivo obrigatório" });
+        }
+
+        const buffer = await file.toBuffer();
+        if (file.file.truncated) {
+          return reply
+            .code(413)
+            .send({ error: "Arquivo muito grande (máx. 25MB)" });
+        }
+
         const stored = await storeUpload({
           buffer,
           mimeType: file.mimetype,
-          filename: file.filename,
+          filename: file.filename || "arquivo",
         });
         return {
           url: stored.url,
           mimeType: stored.mimeType,
-          type: stored.mimeType.startsWith("image/")
-            ? "image"
-            : stored.mimeType.startsWith("audio/")
-              ? "audio"
-              : stored.mimeType.startsWith("video/")
-                ? "video"
-                : "file",
+          type: stored.type,
         };
       } catch (err) {
-        const e = err as { statusCode?: number; message: string };
+        request.log.error(err);
+        const e = err as { statusCode?: number; code?: string; message: string };
+        const tooLarge =
+          e.statusCode === 413 ||
+          e.code === "FST_REQ_FILE_TOO_LARGE" ||
+          e.code === "FST_ERR_CTP_BODY_TOO_LARGE" ||
+          /file size|too large/i.test(e.message || "");
         return reply
-          .code(e.statusCode ?? 500)
-          .send({ error: e.message || "Falha no upload" });
+          .code(tooLarge ? 413 : (e.statusCode ?? 500))
+          .send({
+            error: tooLarge
+              ? "Arquivo muito grande (máx. 25MB)"
+              : e.message || "Falha no upload",
+          });
       }
     },
   );

@@ -17,7 +17,10 @@ import { createSocketServer } from "./sockets/index.js";
 import { config } from "./config.js";
 
 async function main() {
-  const app = Fastify({ logger: true });
+  const app = Fastify({
+    logger: true,
+    bodyLimit: config.upload.maxBytes,
+  });
 
   await app.register(cors, {
     origin: (origin, cb) => {
