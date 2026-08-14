@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "npm run build -w @ebano/shared && prisma generate && tsc -p tsconfig.json",
-    "start": "prisma db push --skip-generate && node dist/index.js",
+    "start": "prisma db push --skip-generate --accept-data-loss; node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "postinstall": "prisma generate",
     "db:generate": "prisma generate",

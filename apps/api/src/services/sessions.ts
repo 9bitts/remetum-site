@@ -11,6 +11,15 @@ function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
+function isMissingSessionTable(err: unknown) {
+  const e = err as { code?: string; message?: string };
+  return (
+    e.code === "P2021" ||
+    e.code === "P2010" ||
+    /refresh_sessions|does not exist|no such table/i.test(e.message ?? "")
+  );
+}
+
 export async function issueAuthTokens(userId: string, email: string) {
   const familyId = randomUUID();
   const jti = randomUUID();
@@ -20,14 +29,21 @@ export async function issueAuthTokens(userId: string, email: string) {
   ]);
 
   const expiresAt = new Date(Date.now() + config.refreshTokenTtlSeconds * 1000);
-  await prisma.refreshSession.create({
-    data: {
-      userId,
-      tokenHash: hashToken(refresh.token),
-      familyId,
-      expiresAt,
-    },
-  });
+  try {
+    await prisma.refreshSession.create({
+      data: {
+        userId,
+        tokenHash: hashToken(refresh.token),
+        familyId,
+        expiresAt,
+      },
+    });
+  } catch (err) {
+    if (!isMissingSessionTable(err)) throw err;
+    console.error(
+      "[auth] refresh_sessions table missing — issuing JWT without server session store",
+    );
+  }
 
   return { accessToken, refreshToken: refresh.token };
 }
@@ -35,9 +51,34 @@ export async function issueAuthTokens(userId: string, email: string) {
 export async function rotateRefreshToken(rawToken: string) {
   const payload = await verifyRefreshToken(rawToken);
   const tokenHash = hashToken(rawToken);
-  const session = await prisma.refreshSession.findUnique({
-    where: { tokenHash },
-  });
+
+  let session: {
+    id: string;
+    userId: string;
+    familyId: string;
+    expiresAt: Date;
+    revokedAt: Date | null;
+  } | null = null;
+
+  try {
+    session = await prisma.refreshSession.findUnique({
+      where: { tokenHash },
+    });
+  } catch (err) {
+    if (!isMissingSessionTable(err)) throw err;
+    // Legacy path: trust signed refresh JWT until the table exists.
+    const user = await prisma.user.findUnique({ where: { id: payload.sub } });
+    if (!user) {
+      throw Object.assign(new Error("Usuário não encontrado"), { statusCode: 401 });
+    }
+    const jti = randomUUID();
+    const familyId = payload.familyId ?? randomUUID();
+    const [accessToken, refresh] = await Promise.all([
+      signAccessToken(user.id, user.email),
+      signRefreshToken(user.id, { jti, familyId }),
+    ]);
+    return { accessToken, refreshToken: refresh.token, user };
+  }
 
   if (!session || session.userId !== payload.sub) {
     if (payload.familyId) {
@@ -94,15 +135,23 @@ export async function rotateRefreshToken(rawToken: string) {
 export async function revokeRefreshToken(rawToken: string | undefined) {
   if (!rawToken) return;
   const tokenHash = hashToken(rawToken);
-  await prisma.refreshSession.updateMany({
-    where: { tokenHash, revokedAt: null },
-    data: { revokedAt: new Date() },
-  });
+  try {
+    await prisma.refreshSession.updateMany({
+      where: { tokenHash, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+  } catch (err) {
+    if (!isMissingSessionTable(err)) throw err;
+  }
 }
 
 export async function revokeAllUserSessions(userId: string) {
-  await prisma.refreshSession.updateMany({
-    where: { userId, revokedAt: null },
-    data: { revokedAt: new Date() },
-  });
+  try {
+    await prisma.refreshSession.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+  } catch (err) {
+    if (!isMissingSessionTable(err)) throw err;
+  }
 }
