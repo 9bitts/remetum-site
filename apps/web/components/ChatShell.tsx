@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   SOCKET_EVENTS,
   type CallAcceptedEvent,
@@ -9,13 +9,14 @@ import {
   type ConversationSummary,
   type Message,
   type MessageNewEvent,
+  type MessageSentEvent,
   type MessageStatusEvent,
   type MessageUpdatedEvent,
   type ConversationUpdatedEvent,
   type PresenceEvent,
   type TypingEvent,
 } from "@ebano/shared";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, refreshSession } from "@/lib/api";
 import { connectSocket, getSocket } from "@/lib/socket";
 import { useAuth } from "./AuthProvider";
 import { ConversationList } from "./ConversationList";
@@ -56,6 +57,17 @@ export function ChatShell() {
   const [forwarding, setForwarding] = useState<Message | null>(null);
   const [callState, setCallState] = useState<CallUiState | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
+  const [failedTempIds, setFailedTempIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+
+  const selectedIdRef = useRef<string | null>(null);
+  const loadGenRef = useRef(0);
+  const deepLinkDone = useRef(false);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
 
   const selected = useMemo(
     () => conversations.find((c) => c.id === selectedId) ?? null,
@@ -111,16 +123,22 @@ export function ChatShell() {
       `/conversations${showArchived ? "?archived=1" : ""}`,
     );
     setConversations(res.conversations);
+    return res.conversations;
   }, [showArchived]);
 
   const loadMessages = useCallback(
     async (conversationId: string, cursor?: string) => {
+      const gen = cursor ? loadGenRef.current : ++loadGenRef.current;
       const qs = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
       const res = await api<{ messages: Message[]; nextCursor: string | null }>(
         `/conversations/${conversationId}/messages${qs}`,
       );
 
+      if (!cursor && gen !== loadGenRef.current) return res;
+      if (!cursor && selectedIdRef.current !== conversationId) return res;
+
       if (cursor) {
+        if (selectedIdRef.current !== conversationId) return res;
         setMessages((prev) => {
           const existing = new Set(prev.map((m) => m.id));
           const older = res.messages.filter((m) => !existing.has(m.id));
@@ -152,17 +170,56 @@ export function ChatShell() {
     [user?.id],
   );
 
+  const selectConversation = useCallback(
+    async (id: string) => {
+      setSelectedId(id);
+      setMobileShowChat(true);
+      setReplyTo(null);
+      setEditing(null);
+      setNextCursor(null);
+      getSocket().emit(SOCKET_EVENTS.CONVERSATION_JOIN, id);
+      await loadMessages(id);
+    },
+    [loadMessages],
+  );
+
+  const syncAfterReconnect = useCallback(async () => {
+    try {
+      await refreshConversations();
+      const openId = selectedIdRef.current;
+      if (openId) await loadMessages(openId);
+    } catch {
+      // ignore transient sync errors
+    }
+  }, [refreshConversations, loadMessages]);
+
   useEffect(() => {
     if (!user) return;
-    void refreshConversations().catch((err) => {
-      if (err instanceof ApiError && err.status === 401) {
-        void refresh();
-        return;
-      }
-      setBootError(err instanceof Error ? err.message : "Falha ao carregar");
-    });
+    void refreshConversations()
+      .then((list) => {
+        setBootError(null);
+        if (deepLinkDone.current) return;
+        deepLinkDone.current = true;
+        try {
+          const params = new URLSearchParams(window.location.search);
+          const c = params.get("c");
+          if (c && list.some((x) => x.id === c)) {
+            void selectConversation(c);
+            window.history.replaceState({}, "", "/app");
+          }
+        } catch {
+          // ignore
+        }
+      })
+      .catch((err) => {
+        if (err instanceof ApiError && err.status === 401) {
+          void refresh();
+          return;
+        }
+        setBootError(err instanceof Error ? err.message : "Falha ao carregar");
+      });
     void registerPush().catch(() => undefined);
-  }, [user, refreshConversations, refresh]);
+  }, [user, refreshConversations, refresh, selectConversation]);
 
   useEffect(() => {
     const q = search.trim();
@@ -194,7 +251,7 @@ export function ChatShell() {
         }
         const next = prev.map((c) => {
           if (c.id !== msg.conversationId) return c;
-          const isOpen = selectedId === c.id;
+          const isOpen = selectedIdRef.current === c.id;
           return {
             ...c,
             lastMessage: msg,
@@ -211,7 +268,7 @@ export function ChatShell() {
         });
       });
 
-      if (selectedId === msg.conversationId) {
+      if (selectedIdRef.current === msg.conversationId) {
         setMessages((prev) => {
           if (event.clientTempId) {
             const withoutTemp = prev.filter((m) => m.id !== event.clientTempId);
@@ -228,6 +285,23 @@ export function ChatShell() {
           });
         }
       }
+    };
+
+    const onSent = (event: MessageSentEvent) => {
+      if (!event.clientTempId) return;
+      setFailedTempIds((prev) => {
+        if (!prev.has(event.clientTempId!)) return prev;
+        const next = new Set(prev);
+        next.delete(event.clientTempId!);
+        return next;
+      });
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === event.clientTempId
+            ? { ...m, id: event.messageId, createdAt: event.createdAt }
+            : m,
+        ),
+      );
     };
 
     const onUpdated = (event: MessageUpdatedEvent) => {
@@ -279,14 +353,17 @@ export function ChatShell() {
     };
 
     const onConversationUpdated = (event: ConversationUpdatedEvent) => {
-      socket.emit("conversation:join", event.conversationId);
+      socket.emit(SOCKET_EVENTS.CONVERSATION_JOIN, event.conversationId);
       void refreshConversations();
     };
 
     const onCallOffer = (offer: CallOfferEvent) => {
       if (offer.fromUserId === user.id) {
         setCallState((prev) => {
-          if (prev?.phase === "outgoing" && prev.conversationId === offer.conversationId) {
+          if (
+            prev?.phase === "outgoing" &&
+            prev.conversationId === offer.conversationId
+          ) {
             return { ...prev, callId: offer.callId };
           }
           return prev;
@@ -309,7 +386,11 @@ export function ChatShell() {
       setCallState(null);
     };
 
-    const onSocketError = (payload: { event?: string; message?: string }) => {
+    const onSocketError = (payload: {
+      event?: string;
+      message?: string;
+      clientTempId?: string;
+    }) => {
       if (
         payload.event === SOCKET_EVENTS.CALL_INVITE ||
         payload.event === SOCKET_EVENTS.CALL_ACCEPT
@@ -319,9 +400,18 @@ export function ChatShell() {
           message: payload.message ?? "Falha na chamada",
         });
       }
+      if (payload.event === SOCKET_EVENTS.MESSAGE_SEND && payload.clientTempId) {
+        setFailedTempIds((prev) => new Set(prev).add(payload.clientTempId!));
+      }
     };
 
+    const onConnect = () => {
+      void syncAfterReconnect();
+    };
+
+    socket.on("connect", onConnect);
     socket.on(SOCKET_EVENTS.MESSAGE_NEW, onNew);
+    socket.on(SOCKET_EVENTS.MESSAGE_SENT, onSent);
     socket.on(SOCKET_EVENTS.MESSAGE_UPDATED, onUpdated);
     socket.on(SOCKET_EVENTS.MESSAGE_STATUS, onStatus);
     socket.on(SOCKET_EVENTS.TYPING, onTyping);
@@ -332,8 +422,24 @@ export function ChatShell() {
     socket.on(SOCKET_EVENTS.CALL_ENDED, onCallEnded);
     socket.on(SOCKET_EVENTS.ERROR, onSocketError);
 
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void refreshSession().then(() => syncAfterReconnect());
+      }
+    };
+    const onOnline = () => {
+      void refreshSession().then((ok) => {
+        if (ok) connectSocket();
+        void syncAfterReconnect();
+      });
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("online", onOnline);
+
     return () => {
+      socket.off("connect", onConnect);
       socket.off(SOCKET_EVENTS.MESSAGE_NEW, onNew);
+      socket.off(SOCKET_EVENTS.MESSAGE_SENT, onSent);
       socket.off(SOCKET_EVENTS.MESSAGE_UPDATED, onUpdated);
       socket.off(SOCKET_EVENTS.MESSAGE_STATUS, onStatus);
       socket.off(SOCKET_EVENTS.TYPING, onTyping);
@@ -343,18 +449,10 @@ export function ChatShell() {
       socket.off(SOCKET_EVENTS.CALL_ACCEPTED, onCallAccepted);
       socket.off(SOCKET_EVENTS.CALL_ENDED, onCallEnded);
       socket.off(SOCKET_EVENTS.ERROR, onSocketError);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("online", onOnline);
     };
-  }, [user, selectedId, refreshConversations]);
-
-  async function selectConversation(id: string) {
-    setSelectedId(id);
-    setMobileShowChat(true);
-    setReplyTo(null);
-    setEditing(null);
-    setNextCursor(null);
-    getSocket().emit("conversation:join", id);
-    await loadMessages(id);
-  }
+  }, [user, refreshConversations, syncAfterReconnect]);
 
   async function loadOlder() {
     if (!selectedId || !nextCursor || loadingOlder) return;
@@ -533,6 +631,22 @@ export function ChatShell() {
     }
   }
 
+  const displayMessages = useMemo(
+    () =>
+      messages.map((m) =>
+        failedTempIds.has(m.id)
+          ? {
+              ...m,
+              content:
+                m.type === "text"
+                  ? `${m.content ?? ""}\n(falha ao enviar)`.trim()
+                  : m.content,
+            }
+          : m,
+      ),
+    [messages, failedTempIds],
+  );
+
   if (loading || !user) {
     return (
       <main className="flex h-dvh items-center justify-center text-ebano-muted">
@@ -543,8 +657,22 @@ export function ChatShell() {
 
   if (bootError) {
     return (
-      <main className="flex h-dvh items-center justify-center text-red-300">
-        {bootError}
+      <main className="flex h-dvh flex-col items-center justify-center gap-3 px-6 text-center">
+        <p className="text-red-300">{bootError}</p>
+        <button
+          type="button"
+          className="rounded-xl bg-ebano-accent px-4 py-2 text-sm font-medium text-ebano-bg"
+          onClick={() => {
+            setBootError(null);
+            void refreshConversations().catch((err) =>
+              setBootError(
+                err instanceof Error ? err.message : "Falha ao carregar",
+              ),
+            );
+          }}
+        >
+          Tentar de novo
+        </button>
       </main>
     );
   }
@@ -587,7 +715,6 @@ export function ChatShell() {
             </button>
           </div>
         </div>
-        {/* Status temporariamente fora do ar. Para religar: importar e renderizar <StatusTray />. */}
         <ConversationList
           conversations={conversations}
           currentUserId={user.id}
@@ -611,7 +738,7 @@ export function ChatShell() {
           <ChatView
             conversation={selected}
             currentUserId={user.id}
-            messages={messages}
+            messages={displayMessages}
             typingNames={typingNames}
             replyTo={replyTo}
             editing={editing}
@@ -648,7 +775,9 @@ export function ChatShell() {
               void patchPrefs({ archived: !selected.archivedAt })
             }
             onClearChat={() => {
-              if (!window.confirm("Limpar mensagens desta conversa para você?")) {
+              if (
+                !window.confirm("Limpar mensagens desta conversa para você?")
+              ) {
                 return;
               }
               void patchPrefs({ clearChat: true });
@@ -658,9 +787,14 @@ export function ChatShell() {
               if (!peer) return;
               const blocked = window.confirm(`Bloquear ${peer.name}?`);
               if (!blocked) return;
-              void api("/users/block", { body: { userId: peer.id } }).then(() =>
-                alert("Usuário bloqueado"),
-              );
+              void api("/users/block", { body: { userId: peer.id } })
+                .then(() => refreshConversations())
+                .then(() => alert("Usuário bloqueado"))
+                .catch((err) =>
+                  alert(
+                    err instanceof Error ? err.message : "Falha ao bloquear",
+                  ),
+                );
             }}
             onCopyInvite={() => {
               if (!selected.inviteCode) return;

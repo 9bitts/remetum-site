@@ -6,6 +6,8 @@ import type {
   Message as SharedMessage,
   ParticipantRole,
 } from "@ebano/shared";
+import { getIo } from "../sockets/io.js";
+import { assertOwnedMedia } from "./uploads.js";
 
 export async function assertParticipant(conversationId: string, userId: string) {
   const participant = await prisma.conversationParticipant.findUnique({
@@ -39,6 +41,27 @@ export async function isBlockedEither(a: string, b: string) {
   return Boolean(block);
 }
 
+function directPairKey(a: string, b: string) {
+  return [a, b].sort().join(":");
+}
+
+/** Join all sockets of a user into a conversation room. */
+export function joinUserToConversationRoom(userId: string, conversationId: string) {
+  const io = getIo();
+  if (!io) return;
+  void io.in(`user:${userId}`).socketsJoin(`conversation:${conversationId}`);
+}
+
+export async function joinMembersToConversationRoom(conversationId: string) {
+  const members = await prisma.conversationParticipant.findMany({
+    where: { conversationId },
+    select: { userId: true },
+  });
+  for (const m of members) {
+    joinUserToConversationRoom(m.userId, conversationId);
+  }
+}
+
 export async function getOrCreateDirectConversation(
   currentUserId: string,
   otherUserId: string,
@@ -57,29 +80,49 @@ export async function getOrCreateDirectConversation(
     throw Object.assign(new Error("Usuário não encontrado"), { statusCode: 404 });
   }
 
-  const existing = await prisma.conversation.findFirst({
+  const pairKey = directPairKey(currentUserId, otherUserId);
+  const existing = await prisma.conversation.findUnique({ where: { pairKey } });
+  if (existing) return existing;
+
+  const legacy = await prisma.conversation.findFirst({
     where: {
       type: "direct",
+      pairKey: null,
       AND: [
         { participants: { some: { userId: currentUserId } } },
         { participants: { some: { userId: otherUserId } } },
       ],
     },
   });
+  if (legacy) {
+    try {
+      return await prisma.conversation.update({
+        where: { id: legacy.id },
+        data: { pairKey },
+      });
+    } catch {
+      return legacy;
+    }
+  }
 
-  if (existing) return existing;
-
-  return prisma.conversation.create({
-    data: {
-      type: "direct",
-      participants: {
-        create: [
-          { userId: currentUserId, role: "member" },
-          { userId: otherUserId, role: "member" },
-        ],
+  try {
+    return await prisma.conversation.create({
+      data: {
+        type: "direct",
+        pairKey,
+        participants: {
+          create: [
+            { userId: currentUserId, role: "member" },
+            { userId: otherUserId, role: "member" },
+          ],
+        },
       },
-    },
-  });
+    });
+  } catch {
+    const raced = await prisma.conversation.findUnique({ where: { pairKey } });
+    if (raced) return raced;
+    throw Object.assign(new Error("Falha ao criar conversa"), { statusCode: 500 });
+  }
 }
 
 export async function createGroupConversation(
@@ -88,8 +131,25 @@ export async function createGroupConversation(
   memberIds: string[],
 ) {
   const uniqueMembers = [...new Set(memberIds.filter((id) => id !== currentUserId))];
-  if (!name.trim()) {
-    throw Object.assign(new Error("Nome do grupo é obrigatório"), { statusCode: 400 });
+  if (!name.trim() || name.trim().length > 80) {
+    throw Object.assign(new Error("Nome do grupo é obrigatório (máx. 80)"), {
+      statusCode: 400,
+    });
+  }
+  if (uniqueMembers.length > 100) {
+    throw Object.assign(new Error("Grupo muito grande"), { statusCode: 400 });
+  }
+
+  const existingUsers = await prisma.user.findMany({
+    where: { id: { in: uniqueMembers } },
+    select: { id: true },
+  });
+  const existingIds = new Set(existingUsers.map((u) => u.id));
+  const validMembers: string[] = [];
+  for (const id of uniqueMembers) {
+    if (!existingIds.has(id)) continue;
+    if (await isBlockedEither(currentUserId, id)) continue;
+    validMembers.push(id);
   }
 
   return prisma.conversation.create({
@@ -100,7 +160,7 @@ export async function createGroupConversation(
       participants: {
         create: [
           { userId: currentUserId, role: "admin" },
-          ...uniqueMembers.map((userId) => ({
+          ...validMembers.map((userId) => ({
             userId,
             role: "member" as const,
           })),
@@ -135,7 +195,24 @@ export async function joinByInviteCode(userId: string, inviteCode: string) {
     },
   });
 
+  joinUserToConversationRoom(userId, conversation.id);
   return conversation;
+}
+
+export async function rotateInviteCode(adminId: string, conversationId: string) {
+  await assertAdmin(conversationId, adminId);
+  const conversation = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+  });
+  if (!conversation || conversation.type !== "group") {
+    throw Object.assign(new Error("Só grupos têm convite"), { statusCode: 400 });
+  }
+  const inviteCode = randomBytes(6).toString("hex");
+  await prisma.conversation.update({
+    where: { id: conversationId },
+    data: { inviteCode },
+  });
+  return getConversationSummary(conversationId, adminId);
 }
 
 async function unreadCount(
@@ -166,6 +243,80 @@ function toSummaryParticipant(
   return {
     ...toPublicUser(p.user),
     role: p.role,
+  };
+}
+
+async function buildSummary(
+  row: {
+    id: string;
+    type: "direct" | "group";
+    name: string | null;
+    avatarUrl: string | null;
+    inviteCode: string | null;
+    createdAt: Date;
+    participants: Array<{
+      role: ParticipantRole;
+      user: Parameters<typeof toPublicUser>[0];
+    }>;
+  },
+  userId: string,
+  mine: {
+    role: ParticipantRole;
+    pinnedAt: Date | null;
+    archivedAt: Date | null;
+    mutedUntil: Date | null;
+    deletedForMeAt: Date | null;
+  },
+): Promise<ConversationSummary> {
+  const cutoff = mine.deletedForMeAt ?? null;
+  const last = await prisma.message.findFirst({
+    where: {
+      conversationId: row.id,
+      deletedAt: null,
+      ...(cutoff ? { createdAt: { gt: cutoff } } : {}),
+    },
+    orderBy: { createdAt: "desc" },
+    include: { reactions: true, replyTo: true },
+  });
+
+  let lastMessage: SharedMessage | null = null;
+  if (last) {
+    const status =
+      last.senderId === userId
+        ? (
+            await prisma.messageStatus.findFirst({
+              where: {
+                messageId: last.id,
+                userId: { not: userId },
+              },
+              orderBy: { updatedAt: "desc" },
+            })
+          )?.status
+        : (
+            await prisma.messageStatus.findUnique({
+              where: {
+                messageId_userId: { messageId: last.id, userId },
+              },
+            })
+          )?.status;
+    lastMessage = toMessage(last, status ?? undefined, userId);
+  }
+
+  return {
+    id: row.id,
+    type: row.type,
+    name: row.name,
+    avatarUrl: row.avatarUrl,
+    inviteCode:
+      row.type === "group" && mine.role === "admin" ? row.inviteCode : null,
+    createdAt: row.createdAt.toISOString(),
+    pinnedAt: mine.pinnedAt?.toISOString() ?? null,
+    archivedAt: mine.archivedAt?.toISOString() ?? null,
+    mutedUntil: mine.mutedUntil?.toISOString() ?? null,
+    myRole: mine.role,
+    participants: row.participants.map(toSummaryParticipant),
+    lastMessage,
+    unreadCount: await unreadCount(row.id, userId, cutoff),
   };
 }
 
@@ -201,55 +352,12 @@ export async function listConversationsForUser(
   const summaries = await Promise.all(
     rows.map(async (row) => {
       const mine = myParticipation.get(row.id);
-      const cutoff = mine?.deletedForMeAt ?? null;
-      const last = await prisma.message.findFirst({
-        where: {
-          conversationId: row.id,
-          deletedAt: null,
-          ...(cutoff ? { createdAt: { gt: cutoff } } : {}),
-        },
-        orderBy: { createdAt: "desc" },
-        include: { reactions: true, replyTo: true },
-      });
-
-      let lastMessage: SharedMessage | null = null;
-      if (last) {
-        const status =
-          last.senderId === userId
-            ? (
-                await prisma.messageStatus.findFirst({
-                  where: {
-                    messageId: last.id,
-                    userId: { not: userId },
-                  },
-                  orderBy: { updatedAt: "desc" },
-                })
-              )?.status
-            : (
-                await prisma.messageStatus.findUnique({
-                  where: {
-                    messageId_userId: { messageId: last.id, userId },
-                  },
-                })
-              )?.status;
-        lastMessage = toMessage(last, status ?? undefined, userId);
+      if (!mine) {
+        throw Object.assign(new Error("Participação inválida"), {
+          statusCode: 500,
+        });
       }
-
-      return {
-        id: row.id,
-        type: row.type,
-        name: row.name,
-        avatarUrl: row.avatarUrl,
-        inviteCode: row.type === "group" ? row.inviteCode : null,
-        createdAt: row.createdAt.toISOString(),
-        pinnedAt: mine?.pinnedAt?.toISOString() ?? null,
-        archivedAt: mine?.archivedAt?.toISOString() ?? null,
-        mutedUntil: mine?.mutedUntil?.toISOString() ?? null,
-        myRole: mine?.role ?? "member",
-        participants: row.participants.map(toSummaryParticipant),
-        lastMessage,
-        unreadCount: await unreadCount(row.id, userId, cutoff),
-      } satisfies ConversationSummary;
+      return buildSummary(row, userId, mine);
     }),
   );
 
@@ -266,16 +374,15 @@ export async function getConversationSummary(
   conversationId: string,
   userId: string,
 ): Promise<ConversationSummary> {
-  await assertParticipant(conversationId, userId);
-  const list = await listConversationsForUser(userId);
-  const archived = await listConversationsForUser(userId, { archived: true });
-  const found =
-    list.find((c) => c.id === conversationId) ??
-    archived.find((c) => c.id === conversationId);
-  if (!found) {
+  const mine = await assertParticipant(conversationId, userId);
+  const row = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    include: { participants: { include: { user: true } } },
+  });
+  if (!row) {
     throw Object.assign(new Error("Conversa não encontrada"), { statusCode: 404 });
   }
-  return found;
+  return buildSummary(row, userId, mine);
 }
 
 const DEFAULT_MUTE_MINUTES = 365 * 24 * 60;
@@ -416,8 +523,42 @@ export async function searchMessages(userId: string, query: string) {
   return messages.map((m) => toMessage(m, undefined, userId));
 }
 
+async function ensureNotLastAdmin(userId: string, conversationId: string) {
+  const conversation = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+  });
+  if (!conversation || conversation.type !== "group") return;
+
+  const me = await prisma.conversationParticipant.findUnique({
+    where: { conversationId_userId: { conversationId, userId } },
+  });
+  if (!me || me.role !== "admin") return;
+
+  const adminCount = await prisma.conversationParticipant.count({
+    where: { conversationId, role: "admin" },
+  });
+  if (adminCount > 1) return;
+
+  const next = await prisma.conversationParticipant.findFirst({
+    where: { conversationId, userId: { not: userId } },
+    orderBy: { joinedAt: "asc" },
+  });
+  if (next) {
+    await prisma.conversationParticipant.update({
+      where: {
+        conversationId_userId: {
+          conversationId,
+          userId: next.userId,
+        },
+      },
+      data: { role: "admin" },
+    });
+  }
+}
+
 export async function leaveConversation(userId: string, conversationId: string) {
   await assertParticipant(conversationId, userId);
+  await ensureNotLastAdmin(userId, conversationId);
   await prisma.conversationParticipant.delete({
     where: {
       conversationId_userId: { conversationId, userId },
@@ -483,6 +624,18 @@ export async function setMemberRole(
     throw Object.assign(new Error("Cargo inválido"), { statusCode: 400 });
   }
 
+  if (role === "member" && memberId === adminId) {
+    const adminCount = await prisma.conversationParticipant.count({
+      where: { conversationId, role: "admin" },
+    });
+    if (adminCount <= 1) {
+      throw Object.assign(
+        new Error("Promova outro admin antes de se rebaixar"),
+        { statusCode: 400 },
+      );
+    }
+  }
+
   const member = await prisma.conversationParticipant.findUnique({
     where: {
       conversationId_userId: { conversationId, userId: memberId },
@@ -520,14 +673,17 @@ export async function updateGroup(
   const data: { name?: string; avatarUrl?: string | null } = {};
   if (input.name !== undefined) {
     const trimmed = input.name.trim();
-    if (!trimmed) {
-      throw Object.assign(new Error("Nome do grupo é obrigatório"), {
+    if (!trimmed || trimmed.length > 80) {
+      throw Object.assign(new Error("Nome do grupo é obrigatório (máx. 80)"), {
         statusCode: 400,
       });
     }
     data.name = trimmed;
   }
   if (input.avatarUrl !== undefined) {
+    if (input.avatarUrl) {
+      await assertOwnedMedia(input.avatarUrl, adminId);
+    }
     data.avatarUrl = input.avatarUrl;
   }
 

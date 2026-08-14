@@ -29,13 +29,20 @@ export async function pushRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "Subscription inválida" });
     }
 
-    await savePushSubscription({
-      userId: request.userId!,
-      endpoint,
-      p256dh,
-      auth,
-    });
-    return { ok: true };
+    try {
+      await savePushSubscription({
+        userId: request.userId!,
+        endpoint,
+        p256dh,
+        auth,
+      });
+      return { ok: true };
+    } catch (err) {
+      const e = err as { statusCode?: number; message: string };
+      return reply
+        .code(e.statusCode ?? 500)
+        .send({ error: e.message || "Falha ao salvar subscription" });
+    }
   });
 
   app.post<{ Body: { endpoint?: string } }>(
@@ -46,7 +53,7 @@ export async function pushRoutes(app: FastifyInstance) {
       if (!endpoint) {
         return reply.code(400).send({ error: "endpoint obrigatório" });
       }
-      await removePushSubscription(endpoint);
+      await removePushSubscription(endpoint, request.userId!);
       return { ok: true };
     },
   );

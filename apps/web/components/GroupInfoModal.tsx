@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ConversationSummary } from "@ebano/shared";
 import { api } from "@/lib/api";
 import { Avatar } from "./Avatar";
@@ -24,6 +24,10 @@ export function GroupInfoModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const isAdmin = conversation.myRole === "admin";
+
+  useEffect(() => {
+    if (open) setName(conversation.name ?? "");
+  }, [open, conversation.id, conversation.name]);
 
   if (!open) return null;
 
@@ -51,7 +55,7 @@ export function GroupInfoModal({
     try {
       const res = await api<{ conversation: ConversationSummary }>(
         `/conversations/${conversation.id}/members/remove`,
-        { body: { userId } },
+        { body: { memberId: userId } },
       );
       onUpdated(res.conversation);
     } catch (err) {
@@ -67,7 +71,7 @@ export function GroupInfoModal({
     try {
       const res = await api<{ conversation: ConversationSummary }>(
         `/conversations/${conversation.id}/members/role`,
-        { body: { userId, role } },
+        { body: { memberId: userId, role } },
       );
       onUpdated(res.conversation);
     } catch (err) {
@@ -87,6 +91,25 @@ export function GroupInfoModal({
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao sair");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function rotateInvite() {
+    if (!window.confirm("Gerar um novo código? O anterior deixa de funcionar.")) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api<{ conversation: ConversationSummary }>(
+        `/conversations/${conversation.id}/invite/rotate`,
+        { method: "POST" },
+      );
+      onUpdated(res.conversation);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao renovar convite");
     } finally {
       setBusy(false);
     }
@@ -144,13 +167,25 @@ export function GroupInfoModal({
         </div>
 
         {conversation.inviteCode ? (
-          <button
-            type="button"
-            onClick={copyInvite}
-            className="mb-4 w-full rounded-xl border border-white/10 px-3 py-2 text-sm text-ebano-accent hover:bg-white/5"
-          >
-            Copiar convite
-          </button>
+          <div className="mb-4 flex gap-2">
+            <button
+              type="button"
+              onClick={copyInvite}
+              className="flex-1 rounded-xl border border-white/10 px-3 py-2 text-sm text-ebano-accent hover:bg-white/5"
+            >
+              Copiar convite
+            </button>
+            {isAdmin ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void rotateInvite()}
+                className="rounded-xl border border-white/10 px-3 py-2 text-sm text-ebano-muted hover:bg-white/5 disabled:opacity-60"
+              >
+                Renovar
+              </button>
+            ) : null}
+          </div>
         ) : null}
 
         <h3 className="mb-2 text-sm font-medium text-ebano-accent">Membros</h3>

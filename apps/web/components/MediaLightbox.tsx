@@ -53,7 +53,7 @@ export function MediaLightbox({
             className="rounded-xl px-3 py-1.5 text-sm text-white/80 hover:bg-white/10"
             onClick={(e) => {
               e.stopPropagation();
-              openMediaFile(src, title);
+              void openMediaFile(src, title);
             }}
           >
             Abrir
@@ -76,6 +76,7 @@ export function MediaLightbox({
           <img
             src={src}
             alt={title || "imagem"}
+            crossOrigin="use-credentials"
             className="max-h-full max-w-full rounded-2xl object-contain"
             onClick={(e) => e.stopPropagation()}
           />

@@ -187,6 +187,7 @@ export function createSocketServer(
         socket.emit(SOCKET_EVENTS.ERROR, {
           event: SOCKET_EVENTS.MESSAGE_SEND,
           message: (err as Error).message,
+          clientTempId: payload.clientTempId,
         });
       }
     });
@@ -276,12 +277,17 @@ export function createSocketServer(
       }
     });
 
-    socket.on(SOCKET_EVENTS.TYPING, (payload: TypingPayload) => {
-      socket.to(`conversation:${payload.conversationId}`).emit(SOCKET_EVENTS.TYPING, {
-        conversationId: payload.conversationId,
-        userId,
-        isTyping: payload.isTyping,
-      });
+    socket.on(SOCKET_EVENTS.TYPING, async (payload: TypingPayload) => {
+      try {
+        await assertParticipant(payload.conversationId, userId);
+        socket.to(`conversation:${payload.conversationId}`).emit(SOCKET_EVENTS.TYPING, {
+          conversationId: payload.conversationId,
+          userId,
+          isTyping: payload.isTyping,
+        });
+      } catch {
+        // ignore unauthorized typing
+      }
     });
 
     socket.on(SOCKET_EVENTS.CALL_INVITE, async (payload: CallInvitePayload) => {
@@ -442,9 +448,16 @@ export function createSocketServer(
       endCallWithReason(payload, "hangup");
     });
 
-    socket.on("conversation:join", (conversationId: string) => {
-      if (typeof conversationId === "string") {
+    socket.on(SOCKET_EVENTS.CONVERSATION_JOIN, async (conversationId: string) => {
+      try {
+        if (typeof conversationId !== "string" || !conversationId) return;
+        await assertParticipant(conversationId, userId);
         socket.join(`conversation:${conversationId}`);
+      } catch {
+        socket.emit(SOCKET_EVENTS.ERROR, {
+          event: SOCKET_EVENTS.CONVERSATION_JOIN,
+          message: "Sem acesso a esta conversa",
+        });
       }
     });
 

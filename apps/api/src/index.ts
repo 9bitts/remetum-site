@@ -47,7 +47,9 @@ async function main() {
 
   await app.register(cookie);
   await app.register(rateLimit, {
-    global: false,
+    global: true,
+    max: 300,
+    timeWindow: "1 minute",
   });
   await app.register(authPlugin);
 

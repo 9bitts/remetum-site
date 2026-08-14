@@ -57,5 +57,20 @@ export async function getContactUserIds(userId: string) {
     select: { userId: true },
   });
 
-  return [...new Set(peers.map((p) => p.userId))];
+  const peerIds = [...new Set(peers.map((p) => p.userId))];
+  if (peerIds.length === 0) return [] as string[];
+
+  const blocks = await prisma.userBlock.findMany({
+    where: {
+      OR: [
+        { blockerId: userId, blockedId: { in: peerIds } },
+        { blockedId: userId, blockerId: { in: peerIds } },
+      ],
+    },
+  });
+  const blocked = new Set(
+    blocks.flatMap((b) => [b.blockerId, b.blockedId]).filter((id) => id !== userId),
+  );
+
+  return peerIds.filter((id) => !blocked.has(id));
 }

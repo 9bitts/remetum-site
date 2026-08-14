@@ -28,9 +28,8 @@ export async function createLivekitToken(input: {
 
   const { apiKey, apiSecret } = credentials();
   const now = Math.floor(Date.now() / 1000);
-  const ttl = input.ttlSeconds ?? 60 * 60;
+  const ttl = input.ttlSeconds ?? 60 * 30;
 
-  // Mint manually so we can set nbf slightly in the past (Railway clock skew).
   const token = await new SignJWT({
     video: {
       roomJoin: true,
@@ -38,7 +37,7 @@ export async function createLivekitToken(input: {
       canPublish: true,
       canSubscribe: true,
       canPublishData: true,
-      roomCreate: true,
+      roomCreate: false,
     },
     name: input.name,
   })
@@ -71,7 +70,6 @@ export async function ensureLivekitRoom(roomName: string) {
     });
   } catch (err) {
     const message = (err as Error).message ?? "";
-    // Ignore "already exists"; surface auth failures
     if (/exist/i.test(message)) return;
     if (/unauthorized|invalid|api key|403|401/i.test(message)) {
       throw Object.assign(
@@ -94,22 +92,14 @@ export async function verifyLivekitCredentials() {
   try {
     const svc = getRoomService();
     await svc.listRooms();
-    const { url, apiKey, apiSecret } = credentials();
     return {
       ok: true as const,
-      url,
-      keyPrefix: apiKey.slice(0, 6),
-      keyLength: apiKey.length,
-      secretLength: apiSecret.length,
+      url: credentials().url,
     };
   } catch (err) {
-    const { url, apiKey, apiSecret } = credentials();
     return {
       ok: false as const,
-      url,
-      keyPrefix: apiKey.slice(0, 6),
-      keyLength: apiKey.length,
-      secretLength: apiSecret.length,
+      url: credentials().url,
       error: (err as Error).message,
     };
   }

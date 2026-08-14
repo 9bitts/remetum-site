@@ -2,6 +2,7 @@ import { prisma } from "../prisma.js";
 import { assertParticipant, isBlockedEither } from "./conversations.js";
 import { toMessage } from "../lib/serialize.js";
 import type { MessageType } from "@ebano/shared";
+import { assertUsableMedia } from "./uploads.js";
 
 async function loadMessage(messageId: string) {
   return prisma.message.findUnique({
@@ -9,6 +10,10 @@ async function loadMessage(messageId: string) {
     include: { reactions: true, replyTo: true },
   });
 }
+
+const MAX_CONTENT = 4000;
+const MAX_EMOJI = 16;
+const MAX_FORWARD = 20;
 
 export async function createMessage(input: {
   conversationId: string;
@@ -35,6 +40,9 @@ export async function createMessage(input: {
   if (input.type === "text" && !input.content?.trim()) {
     throw Object.assign(new Error("Mensagem vazia"), { statusCode: 400 });
   }
+  if (input.content && input.content.length > MAX_CONTENT) {
+    throw Object.assign(new Error("Mensagem muito longa"), { statusCode: 400 });
+  }
   if (
     (input.type === "image" ||
       input.type === "file" ||
@@ -43,6 +51,9 @@ export async function createMessage(input: {
     !input.mediaUrl
   ) {
     throw Object.assign(new Error("Arquivo obrigatório"), { statusCode: 400 });
+  }
+  if (input.mediaUrl) {
+    await assertUsableMedia(input.mediaUrl, input.senderId);
   }
 
   if (input.replyToId) {
@@ -102,6 +113,9 @@ export async function editMessage(
   if (Date.now() - existing.createdAt.getTime() > 1000 * 60 * 15) {
     throw Object.assign(new Error("Tempo de edição esgotado"), { statusCode: 400 });
   }
+  if (!content.trim() || content.length > MAX_CONTENT) {
+    throw Object.assign(new Error("Conteúdo inválido"), { statusCode: 400 });
+  }
 
   const updated = await prisma.message.update({
     where: { id: messageId },
@@ -142,6 +156,11 @@ export async function toggleReaction(
   userId: string,
   emoji: string,
 ) {
+  const trimmed = emoji.trim();
+  if (!trimmed || trimmed.length > MAX_EMOJI) {
+    throw Object.assign(new Error("Emoji inválido"), { statusCode: 400 });
+  }
+
   const message = await prisma.message.findUnique({ where: { id: messageId } });
   if (!message || message.deletedAt) {
     throw Object.assign(new Error("Mensagem não encontrada"), { statusCode: 404 });
@@ -150,19 +169,19 @@ export async function toggleReaction(
 
   const existing = await prisma.messageReaction.findUnique({
     where: {
-      messageId_userId_emoji: { messageId, userId, emoji },
+      messageId_userId_emoji: { messageId, userId, emoji: trimmed },
     },
   });
 
   if (existing) {
     await prisma.messageReaction.delete({
       where: {
-        messageId_userId_emoji: { messageId, userId, emoji },
+        messageId_userId_emoji: { messageId, userId, emoji: trimmed },
       },
     });
   } else {
     await prisma.messageReaction.create({
-      data: { messageId, userId, emoji },
+      data: { messageId, userId, emoji: trimmed },
     });
   }
 
@@ -226,7 +245,7 @@ export async function forwardMessage(
   }
   await assertParticipant(original.conversationId, userId);
 
-  const uniqueTargets = [...new Set(targetConversationIds)];
+  const uniqueTargets = [...new Set(targetConversationIds)].slice(0, MAX_FORWARD);
   if (uniqueTargets.length === 0) {
     throw Object.assign(new Error("Nenhuma conversa de destino"), {
       statusCode: 400,

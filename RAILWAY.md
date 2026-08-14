@@ -65,3 +65,5 @@ Se a API estiver atrás do proxy Cloudflare, desative o proxy (DNS only / cinza)
 ## Observação
 
 Os packages internos ainda se chamam `@ebano/*`. A marca no produto é **Remetum**.
+
+Presença e estado de chamadas ficam em memória do processo da API. Com **mais de uma réplica**, use sticky sessions ou um adapter Redis no Socket.IO antes de escalar horizontalmente.

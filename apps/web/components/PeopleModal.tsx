@@ -23,27 +23,41 @@ export function PeopleModal({
   useEffect(() => {
     if (!open) {
       setQuery("");
+      setUsers([]);
       setError(null);
       return;
     }
-    setLoading(true);
-    void api<{ users: PublicUser[] }>("/users")
-      .then((res) => setUsers(res.users))
-      .catch((err) =>
-        setError(err instanceof Error ? err.message : "Falha ao carregar pessoas"),
-      )
-      .finally(() => setLoading(false));
   }, [open]);
 
-  const sorted = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const list = q
-      ? users.filter((u) => u.name.toLowerCase().includes(q))
-      : users;
-    return [...list].sort((a, b) =>
-      a.name.localeCompare(b.name, "pt", { sensitivity: "base" }),
-    );
-  }, [users, query]);
+  useEffect(() => {
+    if (!open) return;
+    const q = query.trim();
+    if (q.length < 2) {
+      setUsers([]);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    const t = setTimeout(() => {
+      void api<{ users: PublicUser[] }>(
+        `/users/search?q=${encodeURIComponent(q)}`,
+      )
+        .then((res) => setUsers(res.users))
+        .catch((err) =>
+          setError(err instanceof Error ? err.message : "Falha ao buscar"),
+        )
+        .finally(() => setLoading(false));
+    }, 250);
+    return () => clearTimeout(t);
+  }, [query, open]);
+
+  const sorted = useMemo(
+    () =>
+      [...users].sort((a, b) =>
+        a.name.localeCompare(b.name, "pt", { sensitivity: "base" }),
+      ),
+    [users],
+  );
 
   if (!open) return null;
 
@@ -68,7 +82,7 @@ export function PeopleModal({
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center">
       <div className="flex max-h-[85dvh] w-full max-w-md flex-col rounded-[var(--radius-ebano)] bg-ebano-surface p-4 shadow-xl">
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Todas as pessoas</h2>
+          <h2 className="text-lg font-semibold">Pessoas</h2>
           <button
             type="button"
             onClick={onClose}
@@ -81,14 +95,14 @@ export function PeopleModal({
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Filtrar por nome"
+          placeholder="Buscar por nome (mín. 2 letras)"
           className="mb-3 w-full rounded-xl border border-white/10 bg-ebano-bg px-3 py-2 text-sm outline-none focus:border-ebano-accent"
         />
 
         <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
           {loading ? (
             <p className="px-2 py-10 text-center text-sm text-ebano-muted">
-              Carregando…
+              Buscando…
             </p>
           ) : null}
 
@@ -126,9 +140,9 @@ export function PeopleModal({
 
           {!loading && sorted.length === 0 ? (
             <p className="px-2 py-10 text-center text-sm text-ebano-muted">
-              {query.trim()
-                ? "Nenhuma pessoa encontrada"
-                : "Nenhuma pessoa cadastrada"}
+              {query.trim().length < 2
+                ? "Digite um nome para buscar"
+                : "Nenhuma pessoa encontrada"}
             </p>
           ) : null}
         </div>

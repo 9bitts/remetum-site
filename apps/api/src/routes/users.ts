@@ -6,6 +6,7 @@ import {
   listBlocked,
   unblockUser,
 } from "../services/status.js";
+import { assertOwnedMedia } from "../services/uploads.js";
 
 async function blockedIdSet(userId: string) {
   const blocked = await prisma.userBlock.findMany({
@@ -17,22 +18,43 @@ async function blockedIdSet(userId: string) {
 }
 
 export async function userRoutes(app: FastifyInstance) {
-  app.get("/users", { preHandler: [app.authenticate] }, async (request) => {
-    const blockedIds = await blockedIdSet(request.userId!);
-    const users = await prisma.user.findMany({
-      where: { id: { not: request.userId! } },
-      orderBy: { name: "asc" },
-      take: 1000,
-    });
+  // Directory: search-only (no full dump)
+  app.get<{ Querystring: { q?: string; limit?: string } }>(
+    "/users",
+    { preHandler: [app.authenticate] },
+    async (request) => {
+      const q = (request.query.q ?? "").trim();
+      if (q.length < 2) return { users: [] };
 
-    return {
-      users: users.filter((u) => !blockedIds.has(u.id)).map(toPublicUser),
-    };
-  });
+      const blockedIds = await blockedIdSet(request.userId!);
+      const take = Math.min(Number(request.query.limit) || 40, 50);
+
+      const users = await prisma.user.findMany({
+        where: {
+          id: { not: request.userId! },
+          name: { contains: q, mode: "insensitive" },
+        },
+        orderBy: { name: "asc" },
+        take,
+      });
+
+      return {
+        users: users.filter((u) => !blockedIds.has(u.id)).map(toPublicUser),
+      };
+    },
+  );
 
   app.get<{ Querystring: { q?: string } }>(
     "/users/search",
-    { preHandler: [app.authenticate] },
+    {
+      preHandler: [app.authenticate],
+      config: {
+        rateLimit: {
+          max: 60,
+          timeWindow: "1 minute",
+        },
+      },
+    },
     async (request) => {
       const q = (request.query.q ?? "").trim();
       if (q.length < 2) return { users: [] };
@@ -42,10 +64,7 @@ export async function userRoutes(app: FastifyInstance) {
       const users = await prisma.user.findMany({
         where: {
           id: { not: request.userId! },
-          OR: [
-            { name: { contains: q, mode: "insensitive" } },
-            { email: { contains: q, mode: "insensitive" } },
-          ],
+          name: { contains: q, mode: "insensitive" },
         },
         take: 20,
         orderBy: { name: "asc" },
@@ -65,6 +84,17 @@ export async function userRoutes(app: FastifyInstance) {
     const body = request.body ?? {};
     if (body.name !== undefined && body.name.trim().length < 2) {
       return reply.code(400).send({ error: "Nome inválido" });
+    }
+    if (body.bio !== undefined && body.bio && body.bio.length > 280) {
+      return reply.code(400).send({ error: "Bio muito longa" });
+    }
+    if (body.avatarUrl) {
+      try {
+        await assertOwnedMedia(body.avatarUrl, request.userId!);
+      } catch (err) {
+        const e = err as { statusCode?: number; message: string };
+        return reply.code(e.statusCode ?? 400).send({ error: e.message });
+      }
     }
 
     const user = await prisma.user.update({

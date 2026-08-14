@@ -5,10 +5,12 @@ import {
   getConversationSummary,
   getOrCreateDirectConversation,
   joinByInviteCode,
+  joinMembersToConversationRoom,
   leaveConversation,
   listConversationsForUser,
   listMessages,
   removeMember,
+  rotateInviteCode,
   searchMessages,
   setMemberRole,
   updateConversationPrefs,
@@ -138,6 +140,7 @@ export async function conversationRoutes(app: FastifyInstance) {
           request.userId!,
         );
         await notifyConversationMembers(created.id, "created", request.userId!);
+        await joinMembersToConversationRoom(created.id);
         return { conversation };
       } catch (err) {
         return sendError(reply, err);
@@ -162,6 +165,7 @@ export async function conversationRoutes(app: FastifyInstance) {
           request.userId!,
         );
         await notifyConversationMembers(created.id, "created", request.userId!);
+        await joinMembersToConversationRoom(created.id);
         return reply.code(201).send({ conversation });
       } catch (err) {
         return sendError(reply, err);
@@ -171,7 +175,15 @@ export async function conversationRoutes(app: FastifyInstance) {
 
   app.post<{ Body: { inviteCode?: string } }>(
     "/conversations/join",
-    { preHandler: [app.authenticate] },
+    {
+      preHandler: [app.authenticate],
+      config: {
+        rateLimit: {
+          max: 20,
+          timeWindow: "1 minute",
+        },
+      },
+    },
     async (request, reply) => {
       try {
         const code = request.body?.inviteCode?.trim();
@@ -184,6 +196,24 @@ export async function conversationRoutes(app: FastifyInstance) {
           request.userId!,
         );
         await notifyConversationMembers(created.id, "joined");
+        await joinMembersToConversationRoom(created.id);
+        return { conversation };
+      } catch (err) {
+        return sendError(reply, err);
+      }
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/conversations/:id/invite/rotate",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      try {
+        const conversation = await rotateInviteCode(
+          request.userId!,
+          request.params.id,
+        );
+        await notifyConversationMembers(request.params.id, "updated");
         return { conversation };
       } catch (err) {
         return sendError(reply, err);

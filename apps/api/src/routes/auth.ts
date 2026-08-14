@@ -1,7 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../prisma.js";
 import { hashPassword, verifyPassword } from "../services/password.js";
-import { signAccessToken, signRefreshToken, verifyRefreshToken } from "../services/tokens.js";
+import {
+  issueAuthTokens,
+  revokeRefreshToken,
+  rotateRefreshToken,
+} from "../services/sessions.js";
 import { setAuthCookies, clearAuthCookies } from "../lib/cookies.js";
 import { toAuthUser } from "../lib/serialize.js";
 import { config } from "../config.js";
@@ -17,12 +21,18 @@ type LoginBody = {
   password?: string;
 };
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
 }
 
 function validatePassword(password: string) {
   return password.length >= 8;
+}
+
+function isValidEmail(email: string) {
+  return EMAIL_RE.test(email) && email.length <= 254;
 }
 
 export async function authRoutes(app: FastifyInstance) {
@@ -42,12 +52,12 @@ export async function authRoutes(app: FastifyInstance) {
         const emailRaw = request.body?.email ?? "";
         const password = request.body?.password ?? "";
 
-        if (name.length < 2) {
+        if (name.length < 2 || name.length > 80) {
           return reply
             .code(400)
-            .send({ error: "Nome deve ter ao menos 2 caracteres" });
+            .send({ error: "Nome deve ter entre 2 e 80 caracteres" });
         }
-        if (!emailRaw.includes("@")) {
+        if (!isValidEmail(emailRaw)) {
           return reply.code(400).send({ error: "E-mail inválido" });
         }
         if (!validatePassword(password)) {
@@ -59,7 +69,10 @@ export async function authRoutes(app: FastifyInstance) {
         const email = normalizeEmail(emailRaw);
         const existing = await prisma.user.findUnique({ where: { email } });
         if (existing) {
-          return reply.code(409).send({ error: "E-mail já cadastrado" });
+          // Same shape as success-ish path for enumeration resistance
+          return reply
+            .code(409)
+            .send({ error: "Não foi possível criar a conta com estes dados" });
         }
 
         const passwordHash = await hashPassword(password);
@@ -71,18 +84,13 @@ export async function authRoutes(app: FastifyInstance) {
           },
         });
 
-        const [accessToken, refreshToken] = await Promise.all([
-          signAccessToken(user.id, user.email),
-          signRefreshToken(user.id),
-        ]);
-        setAuthCookies(reply, { accessToken, refreshToken });
+        const tokens = await issueAuthTokens(user.id, user.email);
+        setAuthCookies(reply, tokens);
 
         return reply.code(201).send({ user: toAuthUser(user) });
       } catch (err) {
         request.log.error(err);
-        const message =
-          err instanceof Error ? err.message : "Erro interno no registro";
-        return reply.code(500).send({ error: message });
+        return reply.code(500).send({ error: "Erro interno no registro" });
       }
     },
   );
@@ -119,53 +127,53 @@ export async function authRoutes(app: FastifyInstance) {
           return reply.code(401).send({ error: "Credenciais inválidas" });
         }
 
-        const [accessToken, refreshToken] = await Promise.all([
-          signAccessToken(user.id, user.email),
-          signRefreshToken(user.id),
-        ]);
-        setAuthCookies(reply, { accessToken, refreshToken });
+        const tokens = await issueAuthTokens(user.id, user.email);
+        setAuthCookies(reply, tokens);
 
         return { user: toAuthUser(user) };
       } catch (err) {
         request.log.error(err);
-        const message =
-          err instanceof Error ? err.message : "Erro interno no login";
-        return reply.code(500).send({ error: message });
+        return reply.code(500).send({ error: "Erro interno no login" });
       }
     },
   );
 
-  app.post("/auth/logout", async (_request, reply) => {
+  app.post("/auth/logout", async (request, reply) => {
+    const refresh = request.cookies[config.cookie.refresh];
+    await revokeRefreshToken(refresh);
     clearAuthCookies(reply);
     return { ok: true };
   });
 
-  app.post("/auth/refresh", async (request, reply) => {
-    const token = request.cookies[config.cookie.refresh];
-    if (!token) {
-      return reply.code(401).send({ error: "Refresh token ausente" });
-    }
-
-    try {
-      const payload = await verifyRefreshToken(token);
-      const user = await prisma.user.findUnique({ where: { id: payload.sub } });
-      if (!user) {
-        clearAuthCookies(reply);
-        return reply.code(401).send({ error: "Usuário não encontrado" });
+  app.post(
+    "/auth/refresh",
+    {
+      config: {
+        rateLimit: {
+          max: 60,
+          timeWindow: "1 minute",
+        },
+      },
+    },
+    async (request, reply) => {
+      const token = request.cookies[config.cookie.refresh];
+      if (!token) {
+        return reply.code(401).send({ error: "Refresh token ausente" });
       }
 
-      const [accessToken, refreshToken] = await Promise.all([
-        signAccessToken(user.id, user.email),
-        signRefreshToken(user.id),
-      ]);
-      setAuthCookies(reply, { accessToken, refreshToken });
-
-      return { user: toAuthUser(user) };
-    } catch {
-      clearAuthCookies(reply);
-      return reply.code(401).send({ error: "Refresh token inválido" });
-    }
-  });
+      try {
+        const rotated = await rotateRefreshToken(token);
+        setAuthCookies(reply, {
+          accessToken: rotated.accessToken,
+          refreshToken: rotated.refreshToken,
+        });
+        return { user: toAuthUser(rotated.user) };
+      } catch {
+        clearAuthCookies(reply);
+        return reply.code(401).send({ error: "Refresh token inválido" });
+      }
+    },
+  );
 
   app.get(
     "/auth/me",

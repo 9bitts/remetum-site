@@ -47,6 +47,7 @@ export function Avatar({ name, url, online, size = "md" }: AvatarProps) {
         <img
           src={src}
           alt={name}
+          crossOrigin="use-credentials"
           onError={() => setFailed(true)}
           className={`${dim} rounded-full object-cover ring-1 ring-ebano-accent/40`}
         />

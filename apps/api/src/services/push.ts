@@ -1,6 +1,7 @@
 import webpush from "web-push";
 import { prisma } from "../prisma.js";
 import { config, pushEnabled } from "../config.js";
+import { isUserOnline } from "./presence.js";
 
 if (pushEnabled()) {
   webpush.setVapidDetails(
@@ -16,19 +17,27 @@ export async function savePushSubscription(input: {
   p256dh: string;
   auth: string;
 }) {
+  const existing = await prisma.pushSubscription.findUnique({
+    where: { endpoint: input.endpoint },
+  });
+  if (existing && existing.userId !== input.userId) {
+    throw Object.assign(new Error("Subscription já vinculada a outra conta"), {
+      statusCode: 409,
+    });
+  }
+
   return prisma.pushSubscription.upsert({
     where: { endpoint: input.endpoint },
     create: input,
     update: {
-      userId: input.userId,
       p256dh: input.p256dh,
       auth: input.auth,
     },
   });
 }
 
-export async function removePushSubscription(endpoint: string) {
-  await prisma.pushSubscription.deleteMany({ where: { endpoint } });
+export async function removePushSubscription(endpoint: string, userId: string) {
+  await prisma.pushSubscription.deleteMany({ where: { endpoint, userId } });
 }
 
 export async function notifyUsers(
@@ -37,8 +46,11 @@ export async function notifyUsers(
 ) {
   if (!pushEnabled() || userIds.length === 0) return;
 
+  const offlineIds = userIds.filter((id) => !isUserOnline(id));
+  if (offlineIds.length === 0) return;
+
   const subs = await prisma.pushSubscription.findMany({
-    where: { userId: { in: userIds } },
+    where: { userId: { in: offlineIds } },
   });
 
   await Promise.all(

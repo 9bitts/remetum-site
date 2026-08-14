@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import { access } from "node:fs/promises";
 import path from "node:path";
 import type { FastifyReply } from "fastify";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 import { prisma } from "../prisma.js";
 import { config, r2Enabled } from "../config.js";
 
@@ -13,8 +13,6 @@ const MIME_ALIASES: Record<string, string> = {
   "image/jpg": "image/jpeg",
   "audio/x-m4a": "audio/mp4",
   "audio/x-wav": "audio/wav",
-  "application/x-zip-compressed": "application/zip",
-  "application/x-zip": "application/zip",
 };
 
 const EXT_MIME: Record<string, string> = {
@@ -50,7 +48,6 @@ const EXT_MIME: Record<string, string> = {
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   ".odt": "application/vnd.oasis.opendocument.text",
   ".ods": "application/vnd.oasis.opendocument.spreadsheet",
-  ".zip": "application/zip",
 };
 
 function getS3() {
@@ -72,7 +69,73 @@ function isGenericMime(mime: string) {
   );
 }
 
-export function resolveUploadMime(mimeType: string, filename: string) {
+/** Best-effort magic-byte sniff for common media. */
+export function sniffMime(buffer: Buffer): string | null {
+  if (buffer.length < 12) return null;
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47
+  ) {
+    return "image/png";
+  }
+  if (
+    buffer[0] === 0x47 &&
+    buffer[1] === 0x49 &&
+    buffer[2] === 0x46 &&
+    buffer[3] === 0x38
+  ) {
+    return "image/gif";
+  }
+  if (
+    buffer[0] === 0x52 &&
+    buffer[1] === 0x49 &&
+    buffer[2] === 0x46 &&
+    buffer[3] === 0x46 &&
+    buffer[8] === 0x57 &&
+    buffer[9] === 0x45 &&
+    buffer[10] === 0x42 &&
+    buffer[11] === 0x50
+  ) {
+    return "image/webp";
+  }
+  if (
+    buffer[0] === 0x25 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x44 &&
+    buffer[3] === 0x46
+  ) {
+    return "application/pdf";
+  }
+  // ftyp box → mp4/mov/heic
+  if (
+    buffer[4] === 0x66 &&
+    buffer[5] === 0x74 &&
+    buffer[6] === 0x79 &&
+    buffer[7] === 0x70
+  ) {
+    const brand = buffer.slice(8, 12).toString("ascii");
+    if (/heic|heif|mif1/i.test(brand)) return "image/heic";
+    if (/qt/i.test(brand)) return "video/quicktime";
+    return "video/mp4";
+  }
+  return null;
+}
+
+export function resolveUploadMime(
+  mimeType: string,
+  filename: string,
+  buffer?: Buffer,
+) {
+  const sniffed = buffer ? sniffMime(buffer) : null;
+  if (sniffed && config.upload.allowedMime.includes(sniffed)) {
+    return sniffed;
+  }
+
   const raw = (mimeType || "").split(";")[0].trim().toLowerCase();
   const aliased = MIME_ALIASES[raw] ?? raw;
   const fromExt = EXT_MIME[path.extname(filename).toLowerCase()];
@@ -80,25 +143,147 @@ export function resolveUploadMime(mimeType: string, filename: string) {
   if (!isGenericMime(aliased) && config.upload.allowedMime.includes(aliased)) {
     return aliased;
   }
-  if (fromExt) return fromExt;
+  if (fromExt && config.upload.allowedMime.includes(fromExt)) return fromExt;
   return aliased;
 }
 
-function mediaKind(
-  mimeType: string,
-): "image" | "file" | "audio" | "video" {
+function mediaKind(mimeType: string): "image" | "file" | "audio" | "video" {
   if (mimeType.startsWith("image/")) return "image";
   if (mimeType.startsWith("audio/")) return "audio";
   if (mimeType.startsWith("video/")) return "video";
   return "file";
 }
 
+export function mediaUrlForId(id: string) {
+  return `${config.publicApiUrl.replace(/\/$/, "")}/media/${id}`;
+}
+
+export function extractMediaId(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url, config.publicApiUrl);
+    const match = parsed.pathname.match(/\/media\/([^/]+)$/);
+    return match?.[1] ?? null;
+  } catch {
+    const match = url.match(/\/media\/([^/?#]+)/);
+    return match?.[1] ?? null;
+  }
+}
+
+export function assertAllowedMediaUrl(
+  url: string | undefined,
+  uploaderId: string,
+): void {
+  if (!url) return;
+  const id = extractMediaId(url);
+  if (!id) {
+    throw Object.assign(new Error("URL de mídia inválida"), { statusCode: 400 });
+  }
+  // Ownership checked async by caller via assertOwnedMedia
+  void uploaderId;
+}
+
+export async function assertOwnedMedia(mediaUrl: string, userId: string) {
+  const id = extractMediaId(mediaUrl);
+  if (!id) {
+    throw Object.assign(new Error("URL de mídia inválida"), { statusCode: 400 });
+  }
+  const file = await prisma.storedFile.findUnique({ where: { id } });
+  if (!file) {
+    throw Object.assign(new Error("Arquivo não encontrado"), { statusCode: 404 });
+  }
+  if (file.uploaderId && file.uploaderId !== userId) {
+    throw Object.assign(new Error("Arquivo não pertence a você"), {
+      statusCode: 403,
+    });
+  }
+  return file;
+}
+
+/** Own upload or media already visible to the user (e.g. forward). */
+export async function assertUsableMedia(mediaUrl: string, userId: string) {
+  const id = extractMediaId(mediaUrl);
+  if (!id) {
+    throw Object.assign(new Error("URL de mídia inválida"), { statusCode: 400 });
+  }
+  const file = await prisma.storedFile.findUnique({ where: { id } });
+  if (!file) {
+    throw Object.assign(new Error("Arquivo não encontrado"), { statusCode: 404 });
+  }
+  if (file.uploaderId === userId) return file;
+  if (await canAccessMedia(id, userId)) return file;
+  throw Object.assign(new Error("Arquivo não disponível"), { statusCode: 403 });
+}
+
+export async function canAccessMedia(fileId: string, userId: string) {
+  const file = await prisma.storedFile.findUnique({ where: { id: fileId } });
+  if (!file) return false;
+  if (file.uploaderId === userId) return true;
+
+  const needle = `/media/${fileId}`;
+
+  const [asMessage, asAvatar, asGroupAvatar, asStatus] = await Promise.all([
+    prisma.message.findFirst({
+      where: {
+        mediaUrl: { contains: needle },
+        conversation: { participants: { some: { userId } } },
+      },
+      select: { id: true },
+    }),
+    prisma.user.findFirst({
+      where: {
+        OR: [
+          { id: userId, avatarUrl: { contains: needle } },
+          {
+            avatarUrl: { contains: needle },
+            participants: {
+              some: {
+                conversation: { participants: { some: { userId } } },
+              },
+            },
+          },
+        ],
+      },
+      select: { id: true },
+    }),
+    prisma.conversation.findFirst({
+      where: {
+        avatarUrl: { contains: needle },
+        participants: { some: { userId } },
+      },
+      select: { id: true },
+    }),
+    prisma.statusPost.findFirst({
+      where: {
+        mediaUrl: { contains: needle },
+        expiresAt: { gt: new Date() },
+        OR: [
+          { userId },
+          {
+            user: {
+              participants: {
+                some: {
+                  conversation: { participants: { some: { userId } } },
+                },
+              },
+            },
+          },
+        ],
+      },
+      select: { id: true },
+    }),
+  ]);
+
+  return Boolean(asMessage || asAvatar || asGroupAvatar || asStatus);
+}
+
 export async function storeUpload(input: {
   buffer: Buffer;
   mimeType: string;
   filename: string;
+  uploaderId: string;
 }) {
-  const mimeType = resolveUploadMime(input.mimeType, input.filename);
+  const mimeType = resolveUploadMime(input.mimeType, input.filename, input.buffer);
   if (!config.upload.allowedMime.includes(mimeType)) {
     throw Object.assign(new Error("Tipo de arquivo não permitido"), {
       statusCode: 400,
@@ -123,12 +308,16 @@ export async function storeUpload(input: {
           ContentType: mimeType,
         }),
       );
-      const base =
-        config.r2.publicBaseUrl ||
-        `https://${config.r2.bucket}.${config.r2.accountId}.r2.cloudflarestorage.com`;
+      const stored = await prisma.storedFile.create({
+        data: {
+          mimeType,
+          r2Key: key,
+          uploaderId: input.uploaderId,
+        },
+      });
       return {
-        url: `${base.replace(/\/$/, "")}/${key}`,
-        key,
+        url: mediaUrlForId(stored.id),
+        key: stored.id,
         mimeType,
         type: mediaKind(mimeType),
       };
@@ -142,10 +331,11 @@ export async function storeUpload(input: {
       data: {
         mimeType,
         data: new Uint8Array(input.buffer),
+        uploaderId: input.uploaderId,
       },
     });
     return {
-      url: `${config.publicApiUrl}/media/${stored.id}`,
+      url: mediaUrlForId(stored.id),
       key: stored.id,
       mimeType,
       type: mediaKind(mimeType),
@@ -168,23 +358,71 @@ function applyMediaHeaders(reply: FastifyReply, mimeType: string) {
     mimeType.startsWith("text/");
   reply
     .type(mimeType)
-    .header("Cache-Control", "public, max-age=31536000, immutable")
-    .header("Cross-Origin-Resource-Policy", "cross-origin")
+    .header("Cache-Control", "private, max-age=3600")
+    .header("X-Content-Type-Options", "nosniff")
+    .header("Cross-Origin-Resource-Policy", "same-site")
     .header("Content-Disposition", inline ? "inline" : "attachment");
 }
 
-export async function sendMedia(id: string, reply: FastifyReply) {
+function safeDiskPath(id: string): string | null {
+  if (!id || id.includes("..") || id.includes("/") || id.includes("\\")) {
+    return null;
+  }
+  const resolved = path.resolve(uploadsDir, id);
+  const relative = path.relative(uploadsDir, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    return null;
+  }
+  return resolved;
+}
+
+export async function sendMedia(
+  id: string,
+  reply: FastifyReply,
+  userId: string,
+) {
   if (!id || id.includes("..")) {
     return reply.code(400).send({ error: "Arquivo inválido" });
   }
 
+  const allowed = await canAccessMedia(id, userId);
+  if (!allowed) {
+    return reply.code(404).send({ error: "Arquivo não encontrado" });
+  }
+
   const stored = await prisma.storedFile.findUnique({ where: { id } });
-  if (stored) {
-    applyMediaHeaders(reply, stored.mimeType);
+  if (!stored) {
+    return reply.code(404).send({ error: "Arquivo não encontrado" });
+  }
+
+  applyMediaHeaders(reply, stored.mimeType);
+
+  if (stored.data && stored.data.length > 0) {
     return reply.send(Buffer.from(stored.data));
   }
 
-  const diskPath = path.join(uploadsDir, id);
+  if (stored.r2Key && r2Enabled()) {
+    try {
+      const obj = await getS3().send(
+        new GetObjectCommand({
+          Bucket: config.r2.bucket,
+          Key: stored.r2Key,
+        }),
+      );
+      const bytes = await obj.Body?.transformToByteArray();
+      if (!bytes) {
+        return reply.code(404).send({ error: "Arquivo não encontrado" });
+      }
+      return reply.send(Buffer.from(bytes));
+    } catch {
+      return reply.code(404).send({ error: "Arquivo não encontrado" });
+    }
+  }
+
+  const diskPath = safeDiskPath(id);
+  if (!diskPath) {
+    return reply.code(400).send({ error: "Arquivo inválido" });
+  }
   try {
     await access(diskPath);
     applyMediaHeaders(reply, mimeFromExt(path.extname(diskPath)));
@@ -232,8 +470,6 @@ function mimeToExt(mime: string) {
       return ".mov";
     case "application/pdf":
       return ".pdf";
-    case "application/zip":
-      return ".zip";
     case "text/plain":
       return ".txt";
     case "text/csv":

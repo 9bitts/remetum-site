@@ -1,6 +1,33 @@
 import { prisma } from "../prisma.js";
 import { toPublicUser } from "../lib/serialize.js";
 import type { StatusItem } from "@ebano/shared";
+import { assertOwnedMedia } from "./uploads.js";
+import { isBlockedEither } from "./conversations.js";
+
+async function contactUserIds(viewerId: string) {
+  const contactIds = await prisma.conversationParticipant.findMany({
+    where: {
+      conversation: {
+        participants: { some: { userId: viewerId } },
+      },
+    },
+    select: { userId: true },
+  });
+  return [...new Set([viewerId, ...contactIds.map((c) => c.userId)])];
+}
+
+async function canViewStatus(statusUserId: string, viewerId: string) {
+  if (statusUserId === viewerId) return true;
+  if (await isBlockedEither(statusUserId, viewerId)) return false;
+  const shared = await prisma.conversationParticipant.findFirst({
+    where: {
+      userId: viewerId,
+      conversation: { participants: { some: { userId: statusUserId } } },
+    },
+    select: { conversationId: true },
+  });
+  return Boolean(shared);
+}
 
 export async function createStatus(input: {
   userId: string;
@@ -13,6 +40,12 @@ export async function createStatus(input: {
   }
   if ((input.type === "image" || input.type === "video") && !input.mediaUrl) {
     throw Object.assign(new Error("Mídia obrigatória"), { statusCode: 400 });
+  }
+  if (input.mediaUrl) {
+    await assertOwnedMedia(input.mediaUrl, input.userId);
+  }
+  if (input.content && input.content.length > 500) {
+    throw Object.assign(new Error("Status muito longo"), { statusCode: 400 });
   }
 
   const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24);
@@ -28,19 +61,20 @@ export async function createStatus(input: {
 }
 
 export async function listStatusesForUser(viewerId: string): Promise<StatusItem[]> {
-  const contactIds = await prisma.conversationParticipant.findMany({
+  const userIds = await contactUserIds(viewerId);
+  const blocked = await prisma.userBlock.findMany({
     where: {
-      conversation: {
-        participants: { some: { userId: viewerId } },
-      },
+      OR: [{ blockerId: viewerId }, { blockedId: viewerId }],
     },
-    select: { userId: true },
   });
-  const userIds = [...new Set([viewerId, ...contactIds.map((c) => c.userId)])];
+  const blockedIds = new Set(
+    blocked.flatMap((b) => [b.blockerId, b.blockedId]).filter((id) => id !== viewerId),
+  );
+  const allowed = userIds.filter((id) => !blockedIds.has(id));
 
   const posts = await prisma.statusPost.findMany({
     where: {
-      userId: { in: userIds },
+      userId: { in: allowed },
       expiresAt: { gt: new Date() },
     },
     include: {
@@ -70,6 +104,9 @@ export async function viewStatus(statusId: string, viewerId: string) {
   const status = await prisma.statusPost.findUnique({ where: { id: statusId } });
   if (!status || status.expiresAt < new Date()) {
     throw Object.assign(new Error("Status expirado"), { statusCode: 404 });
+  }
+  if (!(await canViewStatus(status.userId, viewerId))) {
+    throw Object.assign(new Error("Sem permissão"), { statusCode: 403 });
   }
 
   await prisma.statusView.upsert({

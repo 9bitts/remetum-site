@@ -10,6 +10,8 @@ export type AccessTokenPayload = {
 export type RefreshTokenPayload = {
   sub: string;
   typ: "refresh";
+  familyId?: string;
+  jti?: string;
 };
 
 const accessSecret = new TextEncoder().encode(config.jwtSecret);
@@ -24,13 +26,22 @@ export async function signAccessToken(userId: string, email: string) {
     .sign(accessSecret);
 }
 
-export async function signRefreshToken(userId: string) {
-  return new SignJWT({ typ: "refresh" } satisfies Omit<RefreshTokenPayload, "sub">)
+export async function signRefreshToken(
+  userId: string,
+  opts: { jti: string; familyId: string },
+) {
+  const token = await new SignJWT({
+    typ: "refresh",
+    familyId: opts.familyId,
+  })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(userId)
+    .setJti(opts.jti)
     .setIssuedAt()
     .setExpirationTime(`${config.refreshTokenTtlSeconds}s`)
     .sign(refreshSecret);
+
+  return { token, jti: opts.jti, familyId: opts.familyId };
 }
 
 export async function verifyAccessToken(token: string) {
@@ -53,5 +64,7 @@ export async function verifyRefreshToken(token: string) {
   return {
     sub: payload.sub,
     typ: "refresh" as const,
+    familyId: typeof payload.familyId === "string" ? payload.familyId : undefined,
+    jti: typeof payload.jti === "string" ? payload.jti : undefined,
   };
 }

@@ -15,7 +15,15 @@ export async function uploadRoutes(app: FastifyInstance) {
 
   app.post(
     "/uploads",
-    { preHandler: [app.authenticate] },
+    {
+      preHandler: [app.authenticate],
+      config: {
+        rateLimit: {
+          max: 30,
+          timeWindow: "1 minute",
+        },
+      },
+    },
     async (request, reply) => {
       try {
         const file = await request.file();
@@ -34,6 +42,7 @@ export async function uploadRoutes(app: FastifyInstance) {
           buffer,
           mimeType: file.mimetype,
           filename: file.filename || "arquivo",
+          uploaderId: request.userId!,
         });
         return {
           url: stored.url,
@@ -53,7 +62,9 @@ export async function uploadRoutes(app: FastifyInstance) {
           .send({
             error: tooLarge
               ? "Arquivo muito grande (máx. 25MB)"
-              : e.message || "Falha no upload",
+              : e.statusCode && e.statusCode < 500
+                ? e.message
+                : "Falha no upload",
           });
       }
     },

@@ -12,6 +12,20 @@ const defaultOrigins = [
 ];
 
 const publicApiUrl = process.env.PUBLIC_API_URL ?? "http://localhost:4000";
+const isProduction = process.env.NODE_ENV === "production";
+
+const DEFAULT_JWT = "dev-jwt-secret-change-me";
+const DEFAULT_REFRESH = "dev-refresh-secret-change-me";
+
+function requireSecret(name: string, value: string | undefined, fallback: string) {
+  const secret = value ?? fallback;
+  if (isProduction && (!value || value === fallback || value.length < 32)) {
+    throw new Error(
+      `${name} must be set to a strong random value (≥32 chars) in production`,
+    );
+  }
+  return secret;
+}
 
 function resolveCookieDomain(): string | undefined {
   if (process.env.COOKIE_DOMAIN) {
@@ -32,13 +46,17 @@ function resolveCookieDomain(): string | undefined {
 
 export const config = {
   port: Number(process.env.PORT ?? 4000),
+  isProduction,
   corsOrigins: parseCorsOrigins(
     process.env.CORS_ORIGIN ?? defaultOrigins.join(","),
   ),
   publicApiUrl,
-  jwtSecret: process.env.JWT_SECRET ?? "dev-jwt-secret-change-me",
-  jwtRefreshSecret:
-    process.env.JWT_REFRESH_SECRET ?? "dev-refresh-secret-change-me",
+  jwtSecret: requireSecret("JWT_SECRET", process.env.JWT_SECRET, DEFAULT_JWT),
+  jwtRefreshSecret: requireSecret(
+    "JWT_REFRESH_SECRET",
+    process.env.JWT_REFRESH_SECRET,
+    DEFAULT_REFRESH,
+  ),
   accessTokenTtlSeconds: 60 * 15,
   refreshTokenTtlSeconds: 60 * 60 * 24 * 7,
   cookie: {
@@ -47,7 +65,7 @@ export const config = {
     domain: resolveCookieDomain(),
     secure:
       process.env.COOKIE_SECURE === "true" ||
-      process.env.NODE_ENV === "production" ||
+      isProduction ||
       publicApiUrl.startsWith("https://"),
     sameSite: "lax" as const,
     path: "/",
@@ -88,8 +106,6 @@ export const config = {
       "application/vnd.openxmlformats-officedocument.presentationml.presentation",
       "application/vnd.oasis.opendocument.text",
       "application/vnd.oasis.opendocument.spreadsheet",
-      "application/zip",
-      "application/x-zip-compressed",
     ],
   },
   r2: {

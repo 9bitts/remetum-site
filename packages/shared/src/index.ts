@@ -189,6 +189,7 @@ export const SOCKET_EVENTS = {
   TYPING: "typing",
   PRESENCE: "presence",
   CONVERSATION_UPDATED: "conversation:updated",
+  CONVERSATION_JOIN: "conversation:join",
   CALL_INVITE: "call:invite",
   CALL_OFFER: "call:offer",
   CALL_ACCEPT: "call:accept",

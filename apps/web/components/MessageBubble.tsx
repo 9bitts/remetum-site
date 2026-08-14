@@ -71,6 +71,7 @@ export function MessageBubble({
               <img
                 src={src}
                 alt={message.content ?? "imagem"}
+                crossOrigin="use-credentials"
                 className="block max-h-64 max-w-full rounded-xl object-cover"
               />
             </button>
@@ -80,12 +81,13 @@ export function MessageBubble({
             <video
               src={src}
               controls
+              crossOrigin="use-credentials"
               className="mb-1 max-h-64 rounded-xl"
             />
           ) : null}
 
           {message.type === "audio" && src ? (
-            <audio src={src} controls className="mb-1 w-56" />
+            <audio src={src} controls crossOrigin="use-credentials" className="mb-1 w-56" />
           ) : null}
 
           {message.type === "file" && src ? (
@@ -96,7 +98,7 @@ export function MessageBubble({
                   setPreview("pdf");
                   return;
                 }
-                openMediaFile(src, message.content);
+                void openMediaFile(src, message.content);
               }}
               className="mb-1 flex w-full items-center gap-3 rounded-xl bg-black/25 px-3 py-2.5 text-left hover:bg-black/40"
               aria-label={`Abrir ${message.content || "documento"}`}
