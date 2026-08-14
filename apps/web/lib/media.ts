@@ -17,3 +17,22 @@ export function mediaSrc(url?: string | null): string | undefined {
     return url;
   }
 }
+
+export function fileLooksLikePdf(url: string, name?: string | null) {
+  const hay = `${name ?? ""} ${url}`.toLowerCase();
+  return /\.pdf(\?|#|$)/.test(hay) || hay.includes("application/pdf");
+}
+
+/** Opens a file in a new tab, or downloads it when the browser cannot preview it. */
+export function openMediaFile(url: string, filename?: string | null) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  if (filename && !fileLooksLikePdf(url, filename)) {
+    a.setAttribute("download", filename);
+  }
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}

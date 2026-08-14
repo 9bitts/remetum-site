@@ -1,8 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import type { Message } from "@ebano/shared";
 import { formatTime } from "@/lib/format";
-import { mediaSrc } from "@/lib/media";
+import { fileLooksLikePdf, mediaSrc, openMediaFile } from "@/lib/media";
+import { MediaLightbox } from "./MediaLightbox";
 
 const QUICK_REACTIONS = ["❤️", "👍", "😂", "😮", "😢", "🙏"];
 
@@ -23,6 +25,9 @@ export function MessageBubble({
   onDelete: (messageId: string) => void;
   onForward?: (message: Message) => void;
 }) {
+  const [preview, setPreview] = useState<"image" | "pdf" | null>(null);
+  const src = message.mediaUrl ? mediaSrc(message.mediaUrl) : undefined;
+
   if (message.deletedAt) {
     return (
       <div className={`flex ${mine ? "justify-end" : "justify-start"}`}>
@@ -55,36 +60,59 @@ export function MessageBubble({
             </div>
           ) : null}
 
-          {message.type === "image" && message.mediaUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={mediaSrc(message.mediaUrl)}
-              alt={message.content ?? "imagem"}
-              className="mb-1 max-h-64 rounded-xl object-cover"
-            />
+          {message.type === "image" && src ? (
+            <button
+              type="button"
+              className="mb-1 block max-w-full cursor-zoom-in bg-transparent p-0"
+              onClick={() => setPreview("image")}
+              aria-label="Ampliar imagem"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={src}
+                alt={message.content ?? "imagem"}
+                className="block max-h-64 max-w-full rounded-xl object-cover"
+              />
+            </button>
           ) : null}
 
-          {message.type === "video" && message.mediaUrl ? (
+          {message.type === "video" && src ? (
             <video
-              src={mediaSrc(message.mediaUrl)}
+              src={src}
               controls
               className="mb-1 max-h-64 rounded-xl"
             />
           ) : null}
 
-          {message.type === "audio" && message.mediaUrl ? (
-            <audio src={mediaSrc(message.mediaUrl)} controls className="mb-1 w-56" />
+          {message.type === "audio" && src ? (
+            <audio src={src} controls className="mb-1 w-56" />
           ) : null}
 
-          {message.type === "file" && message.mediaUrl ? (
-            <a
-              href={mediaSrc(message.mediaUrl)}
-              target="_blank"
-              rel="noreferrer"
-              className="mb-1 block text-sm text-ebano-accent underline"
+          {message.type === "file" && src ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (fileLooksLikePdf(src, message.content)) {
+                  setPreview("pdf");
+                  return;
+                }
+                openMediaFile(src, message.content);
+              }}
+              className="mb-1 flex w-full items-center gap-3 rounded-xl bg-black/25 px-3 py-2.5 text-left hover:bg-black/40"
+              aria-label={`Abrir ${message.content || "documento"}`}
             >
-              {message.content || "Baixar arquivo"}
-            </a>
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-ebano-accent/15 text-ebano-accent">
+                <FileIcon />
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-medium">
+                  {message.content || "Documento"}
+                </span>
+                <span className="block text-[11px] text-ebano-muted">
+                  Toque para abrir
+                </span>
+              </span>
+            </button>
           ) : null}
 
           {message.content && message.type === "text" ? (
@@ -172,6 +200,33 @@ export function MessageBubble({
           ) : null}
         </div>
       </div>
+      {preview && src ? (
+        <MediaLightbox
+          src={src}
+          kind={preview}
+          title={message.content}
+          onClose={() => setPreview(null)}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function FileIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M14 3v5h5"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }

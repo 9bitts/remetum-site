@@ -160,10 +160,17 @@ export async function storeUpload(input: {
 }
 
 function applyMediaHeaders(reply: FastifyReply, mimeType: string) {
+  const inline =
+    mimeType.startsWith("image/") ||
+    mimeType.startsWith("video/") ||
+    mimeType.startsWith("audio/") ||
+    mimeType === "application/pdf" ||
+    mimeType.startsWith("text/");
   reply
     .type(mimeType)
     .header("Cache-Control", "public, max-age=31536000, immutable")
-    .header("Cross-Origin-Resource-Policy", "cross-origin");
+    .header("Cross-Origin-Resource-Policy", "cross-origin")
+    .header("Content-Disposition", inline ? "inline" : "attachment");
 }
 
 export async function sendMedia(id: string, reply: FastifyReply) {
