@@ -14,6 +14,7 @@ type ApiOptions = {
   method?: string;
   body?: unknown;
   retryOn401?: boolean;
+  signal?: AbortSignal;
 };
 
 const AUTH_SKIP_REFRESH = new Set([
@@ -66,6 +67,7 @@ export async function api<T>(path: string, options: ApiOptions = {}): Promise<T>
     `${API_URL}${path}`,
     {
       method,
+      signal: options.signal,
       headers:
         options.body !== undefined
           ? { "Content-Type": "application/json" }

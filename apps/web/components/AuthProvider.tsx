@@ -39,8 +39,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [sessionError, setSessionError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 12_000);
     try {
-      const data = await api<AuthResponse>("/auth/me");
+      const data = await api<AuthResponse>("/auth/me", {
+        signal: controller.signal,
+      });
       setUser(data.user);
       setSessionError(null);
       connectSocket();
@@ -52,10 +56,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         disconnectSocket();
         return;
       }
+      const aborted =
+        (err instanceof DOMException && err.name === "AbortError") ||
+        (err instanceof Error && err.name === "AbortError");
       setSessionError(
-        err instanceof Error ? err.message : "Falha de conexão",
+        aborted
+          ? "A API não respondeu. Tente de novo em instantes."
+          : err instanceof Error
+            ? err.message
+            : "Falha de conexão",
       );
     } finally {
+      window.clearTimeout(timer);
       setLoading(false);
     }
   }, []);

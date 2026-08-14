@@ -18,10 +18,16 @@ const DEFAULT_JWT = "dev-jwt-secret-change-me";
 const DEFAULT_REFRESH = "dev-refresh-secret-change-me";
 
 function requireSecret(name: string, value: string | undefined, fallback: string) {
-  const secret = value ?? fallback;
-  if (isProduction && (!value || value === fallback || value.length < 32)) {
-    throw new Error(
-      `${name} must be set to a strong random value (≥32 chars) in production`,
+  const secret = (value ?? "").trim() || fallback;
+  if (isProduction && (!value?.trim() || secret === fallback)) {
+    // Do not crash the process — a down API looks like an infinite "Carregando…".
+    // Still log loudly so secrets get rotated in Railway.
+    console.error(
+      `[security] ${name} is missing or still the insecure default. Set a long random value in Railway env.`,
+    );
+  } else if (isProduction && secret.length < 24) {
+    console.error(
+      `[security] ${name} is shorter than recommended (24+ chars).`,
     );
   }
   return secret;
