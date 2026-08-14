@@ -1,10 +1,10 @@
-import { AuthProvider } from "@/components/AuthProvider";
+import { RequireAuth } from "@/components/AuthProvider";
 import { ChatShell } from "@/components/ChatShell";
 
 export default function AppPage() {
   return (
-    <AuthProvider>
+    <RequireAuth>
       <ChatShell />
-    </AuthProvider>
+    </RequireAuth>
   );
 }

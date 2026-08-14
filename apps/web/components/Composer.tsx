@@ -4,6 +4,7 @@ import type { FormEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import type { Message } from "@ebano/shared";
 import { uploadMedia } from "@/lib/upload";
+import { registerBackHandler } from "@/lib/back-stack";
 
 export function Composer({
   disabled,
@@ -37,10 +38,30 @@ export function Composer({
   const mediaRecorder = useRef<MediaRecorder | null>(null);
   const chunks = useRef<Blob[]>([]);
   const recordStartedAt = useRef<number>(0);
+  const cancelRecording = useRef(false);
 
   useEffect(() => {
     if (editing) setText(editing.content ?? "");
   }, [editing]);
+
+  useEffect(() => {
+    if (!recording) return;
+    return registerBackHandler(() => {
+      cancelRecording.current = true;
+      mediaRecorder.current?.stop();
+      setRecording(false);
+      return true;
+    });
+  }, [recording]);
+
+  useEffect(() => {
+    if (!editing && !replyTo) return;
+    return registerBackHandler(() => {
+      if (editing) onCancelEdit();
+      else onCancelReply();
+      return true;
+    });
+  }, [editing, replyTo, onCancelEdit, onCancelReply]);
 
   function handleChange(value: string) {
     setText(value);
@@ -92,11 +113,17 @@ export function Composer({
       const recorder = new MediaRecorder(stream);
       chunks.current = [];
       recordStartedAt.current = Date.now();
+      cancelRecording.current = false;
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunks.current.push(e.data);
       };
       recorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
+        if (cancelRecording.current) {
+          cancelRecording.current = false;
+          chunks.current = [];
+          return;
+        }
         const blob = new Blob(chunks.current, { type: "audio/webm" });
         const file = new File([blob], `audio-${Date.now()}.webm`, {
           type: "audio/webm",

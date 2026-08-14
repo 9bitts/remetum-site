@@ -11,12 +11,13 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import type { AuthResponse, AuthUser } from "@ebano/shared";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { connectSocket, disconnectSocket } from "@/lib/socket";
 
 type AuthContextValue = {
   user: AuthUser | null;
   loading: boolean;
+  sessionError: string | null;
   refresh: () => Promise<void>;
   logout: () => Promise<void>;
   setUser: (user: AuthUser | null) => void;
@@ -24,43 +25,120 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+function AuthLoading() {
+  return (
+    <main className="flex h-dvh items-center justify-center text-ebano-muted">
+      Carregando…
+    </main>
+  );
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const router = useRouter();
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [sessionError, setSessionError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
       const data = await api<AuthResponse>("/auth/me");
       setUser(data.user);
+      setSessionError(null);
       connectSocket();
-    } catch {
-      setUser(null);
-      disconnectSocket();
-      router.replace("/login");
+    } catch (err) {
+      const unauthorized = err instanceof ApiError && err.status === 401;
+      if (unauthorized) {
+        setUser(null);
+        setSessionError(null);
+        disconnectSocket();
+        return;
+      }
+      setSessionError(
+        err instanceof Error ? err.message : "Falha de conexão",
+      );
     } finally {
       setLoading(false);
     }
-  }, [router]);
+  }, []);
 
   useEffect(() => {
     void refresh();
-    return () => disconnectSocket();
   }, [refresh]);
 
+  useEffect(() => {
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) void refresh();
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, [refresh]);
+
+  useEffect(() => {
+    return () => disconnectSocket();
+  }, []);
+
   const logout = useCallback(async () => {
-    await api("/auth/logout", { method: "POST" });
+    try {
+      await api("/auth/logout", { method: "POST" });
+    } catch {
+      // Local session still ends; cookies may already be gone.
+    }
     disconnectSocket();
     setUser(null);
-    router.replace("/login");
-  }, [router]);
+    setSessionError(null);
+    window.location.replace("/login");
+  }, []);
 
   const value = useMemo(
-    () => ({ user, loading, refresh, logout, setUser }),
-    [user, loading, refresh, logout],
+    () => ({ user, loading, sessionError, refresh, logout, setUser }),
+    [user, loading, sessionError, refresh, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+export function RequireAuth({ children }: { children: ReactNode }) {
+  const { user, loading, sessionError, refresh } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!loading && !user && !sessionError) {
+      router.replace("/login");
+    }
+  }, [loading, user, sessionError, router]);
+
+  if (loading) return <AuthLoading />;
+
+  if (!user && sessionError) {
+    return (
+      <main className="flex h-dvh flex-col items-center justify-center gap-3 px-6 text-center">
+        <p className="text-ebano-muted">{sessionError}</p>
+        <button
+          type="button"
+          onClick={() => void refresh()}
+          className="rounded-xl bg-ebano-accent px-4 py-2 text-sm font-medium text-ebano-bg"
+        >
+          Tentar de novo
+        </button>
+      </main>
+    );
+  }
+
+  if (!user) return <AuthLoading />;
+
+  return children;
+}
+
+export function RedirectIfAuthed({ children }: { children: ReactNode }) {
+  const { user, loading } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!loading && user) router.replace("/app");
+  }, [loading, user, router]);
+
+  if (loading) return <AuthLoading />;
+  if (user) return <AuthLoading />;
+  return children;
 }
 
 export function useAuth() {

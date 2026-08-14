@@ -15,7 +15,7 @@ import {
   type PresenceEvent,
   type TypingEvent,
 } from "@ebano/shared";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { connectSocket, getSocket } from "@/lib/socket";
 import { useAuth } from "./AuthProvider";
 import { ConversationList } from "./ConversationList";
@@ -27,13 +27,14 @@ import { GroupInfoModal } from "./GroupInfoModal";
 import { CallOverlay, type CallUiState } from "./CallOverlay";
 import { registerPush } from "@/lib/push";
 import { conversationPeer, conversationTitle } from "@/lib/format";
+import { useStayInAppBack } from "@/lib/back-stack";
 
 function tempId() {
   return `tmp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export function ChatShell() {
-  const { user, loading, logout, setUser } = useAuth();
+  const { user, loading, logout, setUser, refresh } = useAuth();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -60,6 +61,42 @@ export function ChatShell() {
     () => conversations.find((c) => c.id === selectedId) ?? null,
     [conversations, selectedId],
   );
+
+  useStayInAppBack(Boolean(user) && !loading, () => {
+    if (forwarding) {
+      setForwarding(null);
+      return true;
+    }
+    if (groupInfoOpen) {
+      setGroupInfoOpen(false);
+      return true;
+    }
+    if (settingsOpen) {
+      setSettingsOpen(false);
+      return true;
+    }
+    if (peopleOpen) {
+      setPeopleOpen(false);
+      return true;
+    }
+    if (newChatOpen) {
+      setNewChatOpen(false);
+      return true;
+    }
+    if (callState?.phase === "error") {
+      setCallState(null);
+      return true;
+    }
+    if (mobileShowChat) {
+      setMobileShowChat(false);
+      return true;
+    }
+    if (showArchived) {
+      setShowArchived(false);
+      return true;
+    }
+    return true;
+  });
 
   const typingNames = useMemo(() => {
     if (!selected) return [] as string[];
@@ -117,11 +154,15 @@ export function ChatShell() {
 
   useEffect(() => {
     if (!user) return;
-    void refreshConversations().catch((err) =>
-      setBootError(err instanceof Error ? err.message : "Falha ao carregar"),
-    );
+    void refreshConversations().catch((err) => {
+      if (err instanceof ApiError && err.status === 401) {
+        void refresh();
+        return;
+      }
+      setBootError(err instanceof Error ? err.message : "Falha ao carregar");
+    });
     void registerPush().catch(() => undefined);
-  }, [user, refreshConversations]);
+  }, [user, refreshConversations, refresh]);
 
   useEffect(() => {
     const q = search.trim();

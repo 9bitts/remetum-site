@@ -1,5 +1,6 @@
 import { API_URL } from "./config";
 import { fileToJpegBlob } from "./image";
+import { fetchWithAuth } from "./api";
 
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 export const MAX_UPLOAD_LABEL = "25 MB";
@@ -61,9 +62,8 @@ export async function uploadMedia(
   const form = new FormData();
   form.append("file", prepared.blob, prepared.filename);
 
-  const res = await fetch(`${API_URL}/uploads`, {
+  const res = await fetchWithAuth(`${API_URL}/uploads`, {
     method: "POST",
-    credentials: "include",
     body: form,
   });
   const data = (await res.json().catch(() => ({}))) as {

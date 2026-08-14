@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Manrope } from "next/font/google";
+import { AuthProvider } from "@/components/AuthProvider";
 import { PwaRegister } from "@/components/PwaRegister";
 import "./globals.css";
 
@@ -43,8 +44,10 @@ export default function RootLayout({
   return (
     <html lang="pt-BR" className={manrope.variable}>
       <body className={`${manrope.className} min-h-full antialiased`}>
-        {children}
-        <PwaRegister />
+        <AuthProvider>
+          {children}
+          <PwaRegister />
+        </AuthProvider>
       </body>
     </html>
   );

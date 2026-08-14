@@ -10,6 +10,7 @@ import {
   conversationTitle,
   formatLastSeen,
 } from "@/lib/format";
+import { registerBackHandler } from "@/lib/back-stack";
 
 export function ChatView({
   conversation,
@@ -121,6 +122,15 @@ export function ChatView({
     }
     wasLoadingOlder.current = Boolean(loadingOlder);
   }, [loadingOlder, messages.length]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    return registerBackHandler(() => {
+      setMenuOpen(false);
+      setMuteOpen(false);
+      return true;
+    });
+  }, [menuOpen]);
 
   useEffect(() => {
     if (!menuOpen) return;

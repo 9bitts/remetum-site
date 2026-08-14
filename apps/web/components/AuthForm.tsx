@@ -5,11 +5,14 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
 import type { AuthResponse } from "@ebano/shared";
+import { useAuth } from "./AuthProvider";
+import { connectSocket } from "@/lib/socket";
 
 type Mode = "login" | "register";
 
 export function AuthForm({ mode }: { mode: Mode }) {
   const router = useRouter();
+  const { setUser } = useAuth();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -24,11 +27,15 @@ export function AuthForm({ mode }: { mode: Mode }) {
     setLoading(true);
 
     try {
-      await api<AuthResponse>(isRegister ? "/auth/register" : "/auth/login", {
-        body: isRegister ? { name, email, password } : { email, password },
-      });
-      router.push("/app");
-      router.refresh();
+      const data = await api<AuthResponse>(
+        isRegister ? "/auth/register" : "/auth/login",
+        {
+          body: isRegister ? { name, email, password } : { email, password },
+        },
+      );
+      setUser(data.user);
+      connectSocket();
+      router.replace("/app");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Erro inesperado");
     } finally {

@@ -1,8 +1,10 @@
 import Link from "next/link";
+import { RedirectIfAuthed } from "@/components/AuthProvider";
 
 export default function HomePage() {
   return (
-    <main className="flex min-h-full flex-col items-center justify-center bg-[radial-gradient(ellipse_at_top,_#1a1a1f_0%,_#0B0B0D_55%)] px-6 text-center">
+    <RedirectIfAuthed>
+      <main className="flex min-h-full flex-col items-center justify-center bg-[radial-gradient(ellipse_at_top,_#1a1a1f_0%,_#0B0B0D_55%)] px-6 text-center">
       <p className="mb-3 text-sm tracking-[0.2em] text-ebano-accent uppercase">
         Remetum
       </p>
@@ -26,6 +28,7 @@ export default function HomePage() {
           Criar conta
         </Link>
       </div>
-    </main>
+      </main>
+    </RedirectIfAuthed>
   );
 }

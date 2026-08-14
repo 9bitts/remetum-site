@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { openMediaFile } from "@/lib/media";
+import { registerBackHandler } from "@/lib/back-stack";
 
 export function MediaLightbox({
   src,
@@ -23,9 +24,14 @@ export function MediaLightbox({
       if (e.key === "Escape") onClose();
     }
     window.addEventListener("keydown", onKey);
+    const unregisterBack = registerBackHandler(() => {
+      onClose();
+      return true;
+    });
     return () => {
       document.body.style.overflow = prev;
       window.removeEventListener("keydown", onKey);
+      unregisterBack();
     };
   }, [onClose]);
 
