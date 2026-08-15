@@ -18,21 +18,28 @@ async function blockedIdSet(userId: string) {
 }
 
 export async function userRoutes(app: FastifyInstance) {
-  // Directory: search-only (no full dump)
   app.get<{ Querystring: { q?: string; limit?: string } }>(
     "/users",
-    { preHandler: [app.authenticate] },
+    {
+      preHandler: [app.authenticate],
+      config: {
+        rateLimit: {
+          max: 60,
+          timeWindow: "1 minute",
+        },
+      },
+    },
     async (request) => {
       const q = (request.query.q ?? "").trim();
-      if (q.length < 2) return { users: [] };
-
       const blockedIds = await blockedIdSet(request.userId!);
-      const take = Math.min(Number(request.query.limit) || 40, 50);
+      const take = Math.min(Number(request.query.limit) || 100, 200);
 
       const users = await prisma.user.findMany({
         where: {
           id: { not: request.userId! },
-          name: { contains: q, mode: "insensitive" },
+          ...(q.length > 0
+            ? { name: { contains: q, mode: "insensitive" } }
+            : {}),
         },
         orderBy: { name: "asc" },
         take,

@@ -22,7 +22,7 @@ import { useAuth } from "./AuthProvider";
 import { ConversationList } from "./ConversationList";
 import { ChatView } from "./ChatView";
 import { NewChatModal } from "./NewChatModal";
-import { PeopleModal } from "./PeopleModal";
+import { CommunityView } from "./CommunityView";
 import { SettingsModal } from "./SettingsModal";
 import { GroupInfoModal } from "./GroupInfoModal";
 import { CallOverlay, type CallUiState } from "./CallOverlay";
@@ -47,7 +47,7 @@ export function ChatShell() {
     Record<string, string[]>
   >({});
   const [newChatOpen, setNewChatOpen] = useState(false);
-  const [peopleOpen, setPeopleOpen] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState<"chats" | "community">("chats");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [groupInfoOpen, setGroupInfoOpen] = useState(false);
   const [mobileShowChat, setMobileShowChat] = useState(false);
@@ -87,8 +87,8 @@ export function ChatShell() {
       setSettingsOpen(false);
       return true;
     }
-    if (peopleOpen) {
-      setPeopleOpen(false);
+    if (sidebarTab === "community") {
+      setSidebarTab("chats");
       return true;
     }
     if (newChatOpen) {
@@ -727,18 +727,57 @@ export function ChatShell() {
             </button>
           </div>
         </div>
-        <ConversationList
-          conversations={conversations}
-          currentUserId={user.id}
-          selectedId={selectedId}
-          onSelect={(id) => void selectConversation(id)}
-          search={search}
-          onSearch={setSearch}
-          showArchived={showArchived}
-          onToggleArchived={() => setShowArchived((v) => !v)}
-          onOpenPeople={() => setPeopleOpen(true)}
-          messageHits={messageHits}
-        />
+        <div className="min-h-0 flex-1">
+          {sidebarTab === "community" ? (
+            <CommunityView
+              onCreated={(conversation) => {
+                setConversations((prev) => {
+                  if (prev.some((c) => c.id === conversation.id)) return prev;
+                  return [conversation, ...prev];
+                });
+                setSidebarTab("chats");
+                void selectConversation(conversation.id);
+              }}
+            />
+          ) : (
+            <ConversationList
+              conversations={conversations}
+              currentUserId={user.id}
+              selectedId={selectedId}
+              onSelect={(id) => void selectConversation(id)}
+              search={search}
+              onSearch={setSearch}
+              showArchived={showArchived}
+              onToggleArchived={() => setShowArchived((v) => !v)}
+              onOpenPeople={() => setSidebarTab("community")}
+              messageHits={messageHits}
+            />
+          )}
+        </div>
+        <nav className="flex shrink-0 border-t border-white/5">
+          <button
+            type="button"
+            onClick={() => setSidebarTab("chats")}
+            className={`flex-1 py-3 text-sm font-medium ${
+              sidebarTab === "chats"
+                ? "text-ebano-accent"
+                : "text-ebano-muted hover:text-ebano-text"
+            }`}
+          >
+            Conversas
+          </button>
+          <button
+            type="button"
+            onClick={() => setSidebarTab("community")}
+            className={`flex-1 py-3 text-sm font-medium ${
+              sidebarTab === "community"
+                ? "text-ebano-accent"
+                : "text-ebano-muted hover:text-ebano-text"
+            }`}
+          >
+            Comunidade
+          </button>
+        </nav>
       </aside>
 
       <section
@@ -826,8 +865,15 @@ export function ChatShell() {
             </p>
             <h1 className="mt-3 text-2xl font-semibold">Conversas com estilo.</h1>
             <p className="mt-2 max-w-sm text-ebano-muted">
-              Selecione uma conversa ou inicie uma nova.
+              Selecione uma conversa, inicie uma nova ou conheça a comunidade.
             </p>
+            <button
+              type="button"
+              onClick={() => setSidebarTab("community")}
+              className="mt-5 rounded-xl border border-ebano-accent/70 px-4 py-2 text-sm font-medium text-ebano-accent hover:bg-ebano-accent hover:text-ebano-bg"
+            >
+              Ver comunidade
+            </button>
           </div>
         )}
       </section>
@@ -835,18 +881,6 @@ export function ChatShell() {
       <NewChatModal
         open={newChatOpen}
         onClose={() => setNewChatOpen(false)}
-        onCreated={(conversation) => {
-          setConversations((prev) => {
-            if (prev.some((c) => c.id === conversation.id)) return prev;
-            return [conversation, ...prev];
-          });
-          void selectConversation(conversation.id);
-        }}
-      />
-
-      <PeopleModal
-        open={peopleOpen}
-        onClose={() => setPeopleOpen(false)}
         onCreated={(conversation) => {
           setConversations((prev) => {
             if (prev.some((c) => c.id === conversation.id)) return prev;
