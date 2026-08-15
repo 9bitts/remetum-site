@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Message } from "@ebano/shared";
 import { uploadMedia } from "@/lib/upload";
 import { registerBackHandler } from "@/lib/back-stack";
+import { VoiceCapture } from "@/lib/voice-record";
 
 export function Composer({
   disabled,
@@ -35,20 +36,21 @@ export function Composer({
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const typingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const mediaRecorder = useRef<MediaRecorder | null>(null);
-  const chunks = useRef<Blob[]>([]);
-  const recordStartedAt = useRef<number>(0);
-  const cancelRecording = useRef(false);
+  const capture = useRef(new VoiceCapture());
 
   useEffect(() => {
     if (editing) setText(editing.content ?? "");
   }, [editing]);
 
   useEffect(() => {
+    const session = capture.current;
+    return () => session.abort();
+  }, []);
+
+  useEffect(() => {
     if (!recording) return;
     return registerBackHandler(() => {
-      cancelRecording.current = true;
-      mediaRecorder.current?.stop();
+      capture.current.abort();
       setRecording(false);
       return true;
     });
@@ -102,53 +104,50 @@ export function Composer({
     }
   }
 
+  function armMic() {
+    if (recording || uploading || disabled) return;
+    void capture.current.arm().catch(() => undefined);
+  }
+
   async function toggleRecording() {
     if (recording) {
-      mediaRecorder.current?.stop();
       setRecording(false);
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      chunks.current = [];
-      recordStartedAt.current = Date.now();
-      cancelRecording.current = false;
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunks.current.push(e.data);
-      };
-      recorder.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-        if (cancelRecording.current) {
-          cancelRecording.current = false;
-          chunks.current = [];
+      setUploading(true);
+      setError(null);
+      try {
+        const result = await capture.current.stop();
+        if (!result) {
+          setError("Áudio muito curto");
           return;
         }
-        const blob = new Blob(chunks.current, { type: "audio/webm" });
-        const file = new File([blob], `audio-${Date.now()}.webm`, {
-          type: "audio/webm",
+        const data = await uploadMedia(result.file);
+        onSend({
+          type: "audio",
+          mediaUrl: data.url,
+          durationMs: result.durationMs,
+          replyToId: replyTo?.id,
         });
-        const durationMs = Date.now() - recordStartedAt.current;
-        setError(null);
-        setUploading(true);
-        try {
-          const data = await uploadMedia(file);
-          onSend({
-            type: "audio",
-            mediaUrl: data.url,
-            durationMs,
-            replyToId: replyTo?.id,
-          });
-        } catch (err) {
-          setError(err instanceof Error ? err.message : "Áudio falhou");
-        } finally {
-          setUploading(false);
-        }
-      };
-      mediaRecorder.current = recorder;
-      recorder.start();
+      } catch (err) {
+        capture.current.abort();
+        setError(
+          err instanceof Error && /permission|notallowed|denied/i.test(err.message)
+            ? "Permissão de microfone negada"
+            : err instanceof Error
+              ? err.message
+              : "Áudio falhou",
+        );
+      } finally {
+        setUploading(false);
+      }
+      return;
+    }
+
+    setError(null);
+    try {
+      await capture.current.start();
       setRecording(true);
     } catch {
+      capture.current.abort();
       setError("Permissão de microfone negada");
     }
   }
@@ -177,6 +176,9 @@ export function Composer({
             ✕
           </button>
         </div>
+      ) : null}
+      {recording ? (
+        <div className="px-3 pt-2 text-xs text-red-300">Gravando…</div>
       ) : null}
       {error ? (
         <div className="flex items-center justify-between gap-3 px-3 pt-2 text-xs text-red-300">
@@ -224,6 +226,7 @@ export function Composer({
           <button
             type="button"
             disabled={disabled || uploading}
+            onPointerDown={() => armMic()}
             onClick={() => void toggleRecording()}
             className={`flex h-[42px] w-[42px] items-center justify-center rounded-xl ${
               recording

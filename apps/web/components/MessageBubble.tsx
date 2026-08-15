@@ -87,7 +87,17 @@ export function MessageBubble({
           ) : null}
 
           {message.type === "audio" && src ? (
-            <audio src={src} controls crossOrigin="use-credentials" className="mb-1 w-56" />
+            <audio
+              src={src}
+              controls
+              preload="metadata"
+              playsInline
+              crossOrigin="use-credentials"
+              className="mb-1 w-56"
+              onLoadedMetadata={(e) => {
+                e.currentTarget.currentTime = 0;
+              }}
+            />
           ) : null}
 
           {message.type === "file" && src ? (
