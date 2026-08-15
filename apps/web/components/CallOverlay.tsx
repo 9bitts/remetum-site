@@ -10,6 +10,7 @@ import {
   type RemoteParticipant,
 } from "livekit-client";
 import type { CallAcceptedEvent, CallOfferEvent } from "@ebano/shared";
+import { createRingtone } from "@/lib/ringtone";
 
 export type CallUiState =
   | {
@@ -140,6 +141,29 @@ export function CallOverlay({
       roomRef.current = null;
     };
   }, [state]);
+
+  const incomingCallId =
+    state?.phase === "incoming" ? state.offer.callId : null;
+
+  useEffect(() => {
+    if (!incomingCallId) return;
+
+    const ringtone = createRingtone();
+    void ringtone.start();
+    const vibrateId =
+      typeof navigator !== "undefined" && "vibrate" in navigator
+        ? window.setInterval(() => {
+            navigator.vibrate?.([300, 140, 300]);
+          }, 1600)
+        : null;
+    navigator.vibrate?.([300, 140, 300]);
+
+    return () => {
+      ringtone.stop();
+      if (vibrateId) clearInterval(vibrateId);
+      navigator.vibrate?.(0);
+    };
+  }, [incomingCallId]);
 
   async function flipCamera() {
     const room = roomRef.current;

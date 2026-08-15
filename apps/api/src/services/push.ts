@@ -40,17 +40,34 @@ export async function removePushSubscription(endpoint: string, userId: string) {
   await prisma.pushSubscription.deleteMany({ where: { endpoint, userId } });
 }
 
+export type PushPayload = {
+  title: string;
+  body: string;
+  url?: string;
+  type?: "message" | "call" | "call-ended";
+  callId?: string;
+  tag?: string;
+  requireInteraction?: boolean;
+  reason?: "rejected" | "cancelled" | "hangup" | "unavailable" | "accepted";
+  video?: boolean;
+  fromName?: string;
+  conversationId?: string;
+};
+
 export async function notifyUsers(
   userIds: string[],
-  payload: { title: string; body: string; url?: string },
+  payload: PushPayload,
+  options?: { evenIfOnline?: boolean },
 ) {
   if (!pushEnabled() || userIds.length === 0) return;
 
-  const offlineIds = userIds.filter((id) => !isUserOnline(id));
-  if (offlineIds.length === 0) return;
+  const targetIds = options?.evenIfOnline
+    ? userIds
+    : userIds.filter((id) => !isUserOnline(id));
+  if (targetIds.length === 0) return;
 
   const subs = await prisma.pushSubscription.findMany({
-    where: { userId: { in: offlineIds } },
+    where: { userId: { in: targetIds } },
   });
 
   await Promise.all(
@@ -70,5 +87,66 @@ export async function notifyUsers(
         }
       }
     }),
+  );
+}
+
+export async function notifyIncomingCall(
+  userId: string,
+  input: {
+    callId: string;
+    conversationId: string;
+    fromName: string;
+    video: boolean;
+  },
+) {
+  const kind = input.video ? "chamada de vídeo" : "chamada de voz";
+  await notifyUsers(
+    [userId],
+    {
+      title: "Remetum",
+      body: `${input.fromName} está ligando (${kind})`,
+      url: `/app?c=${encodeURIComponent(input.conversationId)}`,
+      type: "call",
+      callId: input.callId,
+      tag: `call-${input.callId}`,
+      requireInteraction: true,
+      video: input.video,
+      fromName: input.fromName,
+      conversationId: input.conversationId,
+    },
+    { evenIfOnline: true },
+  );
+}
+
+export async function notifyCallEnded(
+  userId: string,
+  input: {
+    callId: string;
+    conversationId: string;
+    reason: "rejected" | "cancelled" | "hangup" | "unavailable" | "accepted";
+    fromName?: string;
+  },
+) {
+  const missed =
+    input.reason === "cancelled" || input.reason === "unavailable";
+  const body = missed
+    ? input.fromName
+      ? `Chamada perdida de ${input.fromName}`
+      : "Chamada perdida"
+    : "Chamada encerrada";
+
+  await notifyUsers(
+    [userId],
+    {
+      title: missed ? "Chamada perdida" : "Remetum",
+      body,
+      url: `/app?c=${encodeURIComponent(input.conversationId)}`,
+      type: "call-ended",
+      callId: input.callId,
+      tag: `call-${input.callId}`,
+      reason: input.reason,
+      conversationId: input.conversationId,
+    },
+    { evenIfOnline: true },
   );
 }

@@ -26,7 +26,7 @@ import { PeopleModal } from "./PeopleModal";
 import { SettingsModal } from "./SettingsModal";
 import { GroupInfoModal } from "./GroupInfoModal";
 import { CallOverlay, type CallUiState } from "./CallOverlay";
-import { registerPush } from "@/lib/push";
+import { registerPush, showLocalCallNotification, closeCallNotification } from "@/lib/push";
 import { conversationPeer, conversationTitle } from "@/lib/format";
 import { useStayInAppBack } from "@/lib/back-stack";
 
@@ -371,9 +371,16 @@ export function ChatShell() {
         return;
       }
       setCallState({ phase: "incoming", offer });
+      void showLocalCallNotification({
+        callId: offer.callId,
+        fromName: offer.fromName,
+        video: offer.video,
+        conversationId: offer.conversationId,
+      });
     };
 
     const onCallAccepted = (accepted: CallAcceptedEvent) => {
+      void closeCallNotification(accepted.callId);
       setCallState((prev) => {
         let peerName = "Chamada";
         if (prev?.phase === "outgoing") peerName = prev.peerName;
@@ -382,7 +389,8 @@ export function ChatShell() {
       });
     };
 
-    const onCallEnded = (_event: CallEndedEvent) => {
+    const onCallEnded = (event: CallEndedEvent) => {
+      void closeCallNotification(event.callId);
       setCallState(null);
     };
 
@@ -568,6 +576,7 @@ export function ChatShell() {
 
   function acceptCall() {
     if (callState?.phase !== "incoming") return;
+    void closeCallNotification(callState.offer.callId);
     getSocket().emit(SOCKET_EVENTS.CALL_ACCEPT, {
       callId: callState.offer.callId,
       conversationId: callState.offer.conversationId,
@@ -576,6 +585,7 @@ export function ChatShell() {
 
   function rejectCall() {
     if (callState?.phase !== "incoming") return;
+    void closeCallNotification(callState.offer.callId);
     getSocket().emit(SOCKET_EVENTS.CALL_REJECT, {
       callId: callState.offer.callId,
       conversationId: callState.offer.conversationId,
@@ -585,6 +595,7 @@ export function ChatShell() {
 
   function cancelCall() {
     if (callState?.phase !== "outgoing") return;
+    if (callState.callId) void closeCallNotification(callState.callId);
     getSocket().emit(SOCKET_EVENTS.CALL_CANCEL, {
       callId: callState.callId ?? "",
       conversationId: callState.conversationId,
@@ -594,6 +605,7 @@ export function ChatShell() {
 
   function hangupCall() {
     if (callState?.phase === "active") {
+      void closeCallNotification(callState.accepted.callId);
       getSocket().emit(SOCKET_EVENTS.CALL_HANGUP, {
         callId: callState.accepted.callId,
         conversationId: callState.accepted.conversationId,

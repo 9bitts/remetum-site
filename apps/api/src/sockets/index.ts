@@ -29,9 +29,16 @@ import {
   trackSocket,
   untrackSocket,
 } from "../services/presence.js";
-import { notifyUsers } from "../services/push.js";
+import { notifyCallEnded, notifyIncomingCall, notifyUsers } from "../services/push.js";
 import { assertParticipant, isBlockedEither } from "../services/conversations.js";
-import { createCall, endCall, getCall, setCallStatus } from "../services/calls.js";
+import {
+  createCall,
+  endCall,
+  getCall,
+  getRingingCallsForCallee,
+  scheduleRingTimeout,
+  setCallStatus,
+} from "../services/calls.js";
 import {
   createLivekitToken,
   ensureLivekitRoom,
@@ -131,6 +138,17 @@ export function createSocketServer(
     }
 
     socket.emit("ready", { socketId: socket.id, userId });
+
+    for (const call of getRingingCallsForCallee(userId)) {
+      socket.emit(SOCKET_EVENTS.CALL_OFFER, {
+        callId: call.callId,
+        conversationId: call.conversationId,
+        fromUserId: call.fromUserId,
+        fromName: call.fromName,
+        video: call.video,
+        livekitUrl: getLivekitUrl(),
+      });
+    }
 
     socket.on(SOCKET_EVENTS.MESSAGE_SEND, async (payload: MessageSendPayload) => {
       try {
@@ -322,10 +340,12 @@ export function createSocketServer(
         }
 
         const me = conversation.participants.find((p) => p.userId === userId);
+        const fromName = me?.user.name ?? "Usuário";
         const call = createCall({
           conversationId: payload.conversationId,
           fromUserId: userId,
           toUserId: other.userId,
+          fromName,
           video: Boolean(payload.video),
         });
 
@@ -333,7 +353,7 @@ export function createSocketServer(
           callId: call.callId,
           conversationId: payload.conversationId,
           fromUserId: userId,
-          fromName: me?.user.name ?? "Usuário",
+          fromName,
           video: call.video,
           livekitUrl: getLivekitUrl(),
         };
@@ -341,6 +361,38 @@ export function createSocketServer(
         io.to(`user:${other.userId}`).emit(SOCKET_EVENTS.CALL_OFFER, offer);
         // Caller also gets callId for cancel/hangup
         socket.emit(SOCKET_EVENTS.CALL_OFFER, offer);
+
+        void notifyIncomingCall(other.userId, {
+          callId: call.callId,
+          conversationId: payload.conversationId,
+          fromName: offer.fromName,
+          video: call.video,
+        });
+
+        scheduleRingTimeout(call.callId, () => {
+          const stillRinging = getCall(call.callId);
+          if (!stillRinging) return;
+          endCall(call.callId);
+          const ended = {
+            callId: call.callId,
+            conversationId: stillRinging.conversationId,
+            reason: "unavailable" as const,
+          };
+          io.to(`user:${stillRinging.fromUserId}`).emit(
+            SOCKET_EVENTS.CALL_ENDED,
+            ended,
+          );
+          io.to(`user:${stillRinging.toUserId}`).emit(
+            SOCKET_EVENTS.CALL_ENDED,
+            ended,
+          );
+          void notifyCallEnded(stillRinging.toUserId, {
+            callId: call.callId,
+            conversationId: stillRinging.conversationId,
+            reason: "unavailable",
+            fromName: stillRinging.fromName,
+          });
+        });
       } catch (err) {
         socket.emit(SOCKET_EVENTS.ERROR, {
           event: SOCKET_EVENTS.CALL_INVITE,
@@ -411,6 +463,11 @@ export function createSocketServer(
           ...base,
           token: calleeToken,
         });
+        void notifyCallEnded(call.toUserId, {
+          callId: payload.callId,
+          conversationId: call.conversationId,
+          reason: "accepted",
+        });
       } catch (err) {
         socket.emit(SOCKET_EVENTS.ERROR, {
           event: SOCKET_EVENTS.CALL_ACCEPT,
@@ -434,6 +491,12 @@ export function createSocketServer(
       };
       io.to(`user:${call.fromUserId}`).emit(SOCKET_EVENTS.CALL_ENDED, ended);
       io.to(`user:${call.toUserId}`).emit(SOCKET_EVENTS.CALL_ENDED, ended);
+      void notifyCallEnded(call.toUserId, {
+        callId: payload.callId,
+        conversationId: call.conversationId,
+        reason,
+        fromName: call.fromName,
+      });
     };
 
     socket.on(SOCKET_EVENTS.CALL_REJECT, (payload: CallSignalPayload) => {
