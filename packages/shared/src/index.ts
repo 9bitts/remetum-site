@@ -4,7 +4,7 @@ export type {
   LoginInput,
   AuthResponse,
   AuthSession,
-} from "./auth";
+} from "./auth.js";
 
 export {
   HANDLE_MIN,
@@ -14,14 +14,14 @@ export {
   normalizeHandle,
   suggestHandle,
   isValidHandle,
-} from "./handle";
+} from "./handle.js";
 
-export type { CallMessageEvent, CallMessagePayload } from "./call-message";
+export type { CallMessageEvent, CallMessagePayload } from "./call-message.js";
 export {
   encodeCallMessage,
   parseCallMessage,
   formatCallMessage,
-} from "./call-message";
+} from "./call-message.js";
 
 export type {
   ConversationSummary,
@@ -36,7 +36,7 @@ export type {
   CallOfferEvent,
   CallAcceptedEvent,
   CallEndedEvent,
-} from "./chat";
+} from "./chat.js";
 
 export type UserStatus = "online" | "offline";
 
