@@ -4,11 +4,15 @@ import { config, pushEnabled } from "../config.js";
 import { isUserOnline } from "./presence.js";
 
 if (pushEnabled()) {
-  webpush.setVapidDetails(
-    config.vapid.subject,
-    config.vapid.publicKey,
-    config.vapid.privateKey,
-  );
+  try {
+    webpush.setVapidDetails(
+      config.vapid.subject,
+      config.vapid.publicKey,
+      config.vapid.privateKey,
+    );
+  } catch (err) {
+    console.error("[push] invalid VAPID keys; push disabled", err);
+  }
 }
 
 export async function savePushSubscription(input: {

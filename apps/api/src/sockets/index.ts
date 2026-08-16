@@ -1,6 +1,5 @@
 import type { Server as HttpServer } from "node:http";
 import { Server, type Socket } from "socket.io";
-import { createAdapter } from "@socket.io/redis-adapter";
 import {
   SOCKET_EVENTS,
   type CallInvitePayload,
@@ -73,7 +72,7 @@ async function authenticateSocket(socket: Socket) {
   return payload.sub;
 }
 
-export function createSocketServer(
+export async function createSocketServer(
   httpServer: HttpServer,
   corsOrigins: string | string[],
 ) {
@@ -84,21 +83,26 @@ export function createSocketServer(
     },
   });
 
-  const redis = getRedis();
-  if (redis) {
-    const sub = redis.duplicate();
-    void Promise.all([
-      redis.status === "ready" || redis.status === "connecting"
-        ? Promise.resolve()
-        : redis.connect(),
-      sub.connect(),
-    ])
-      .then(() => {
+  try {
+    const redis = await getRedis();
+    if (redis) {
+      const sub = redis.duplicate();
+      const adapterMod = await import("@socket.io/redis-adapter");
+      const createAdapter =
+        adapterMod.createAdapter ??
+        (
+          adapterMod as {
+            default?: { createAdapter?: typeof adapterMod.createAdapter };
+          }
+        ).default?.createAdapter;
+      if (createAdapter) {
+        if (redis.status !== "ready") await redis.connect().catch(() => undefined);
+        if (sub.status !== "ready") await sub.connect().catch(() => undefined);
         io.adapter(createAdapter(redis, sub));
-      })
-      .catch((err) => {
-        console.error("[socket] redis adapter failed", err);
-      });
+      }
+    }
+  } catch (err) {
+    console.error("[socket] redis adapter failed", err);
   }
 
   io.use(async (socket, next) => {

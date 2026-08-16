@@ -20,7 +20,7 @@ function memoryUntrack(userId: string, socketId: string) {
 }
 
 export async function trackSocket(userId: string, socketId: string) {
-  const redis = getRedis();
+  const redis = await getRedis();
   if (!redis) return memoryTrack(userId, socketId);
   try {
     await redis.sadd(`remetum:online:${userId}`, socketId);
@@ -31,7 +31,7 @@ export async function trackSocket(userId: string, socketId: string) {
 }
 
 export async function untrackSocket(userId: string, socketId: string) {
-  const redis = getRedis();
+  const redis = await getRedis();
   if (!redis) return memoryUntrack(userId, socketId);
   try {
     await redis.srem(`remetum:online:${userId}`, socketId);
@@ -42,7 +42,7 @@ export async function untrackSocket(userId: string, socketId: string) {
 }
 
 export async function isUserOnline(userId: string) {
-  const redis = getRedis();
+  const redis = await getRedis();
   if (!redis) return (onlineSockets.get(userId)?.size ?? 0) > 0;
   try {
     return (await redis.scard(`remetum:online:${userId}`)) > 0;

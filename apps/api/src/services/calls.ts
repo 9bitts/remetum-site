@@ -34,7 +34,7 @@ function clone(record: CallRecord): CallRecord {
 
 async function persist(callId: string, record: CallRecord) {
   memory.set(callId, record);
-  const redis = getRedis();
+  const redis = await getRedis();
   if (!redis) return;
   try {
     await redis
@@ -49,7 +49,7 @@ async function persist(callId: string, record: CallRecord) {
 
 async function removeStored(callId: string) {
   memory.delete(callId);
-  const redis = getRedis();
+  const redis = await getRedis();
   if (!redis) return;
   try {
     await redis.multi().del(`${CALL_KEY}${callId}`).srem(CALL_INDEX, callId).exec();
@@ -108,7 +108,7 @@ export async function createCall(input: {
 export async function getCall(callId: string) {
   const local = memory.get(callId);
   if (local) return clone(local);
-  const redis = getRedis();
+  const redis = await getRedis();
   if (!redis) return null;
   try {
     const raw = await redis.get(`${CALL_KEY}${callId}`);
@@ -122,7 +122,7 @@ export async function getCall(callId: string) {
 }
 
 export async function listCalls() {
-  const redis = getRedis();
+  const redis = await getRedis();
   if (!redis) {
     return [...memory.entries()].map(([callId, record]) => ({
       callId,

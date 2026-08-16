@@ -110,7 +110,12 @@ async function main() {
 
   try {
     const { createSocketServer } = await import("./sockets/index.js");
-    createSocketServer(app.server, config.corsOrigins);
+    await Promise.race([
+      createSocketServer(app.server, config.corsOrigins),
+      new Promise<void>((_, reject) => {
+        setTimeout(() => reject(new Error("socket setup timed out")), 8_000);
+      }),
+    ]);
   } catch (err) {
     app.log.error({ err }, "socket server failed to start; HTTP still up");
   }
