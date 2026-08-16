@@ -1,0 +1,42 @@
+Título (máx. 30)
+Remetum
+
+Descrição curta (máx. 80)
+Conversas com estilo. Mensagens, grupos, status e chamadas.
+
+Descrição completa
+Remetum é um app de mensagens com visual preto elegante.
+
+Converse 1 a 1, crie grupos, fale na comunidade, envie fotos, arquivos e áudios, publique status e faça chamadas de voz ou vídeo.
+
+• Apelido público (@handle) e link de perfil
+• Entrega, leitura e presença online
+• Fila offline no aparelho
+• Notificações de mensagens e chamadas
+• Conta com recuperação de senha e exclusão
+
+Privacidade: https://remetum.com/privacidade
+Termos: https://remetum.com/termos
+Suporte: https://remetum.com/suporte
+E-mail: hello@remetum.com
+
+Categoria
+Comunicação
+
+Contato
+hello@remetum.com
+
+Política de privacidade
+https://remetum.com/privacidade
+
+Site
+https://remetum.com
+
+Data safety (resumo para o formulário da Play)
+• Coletados: e-mail, nome, apelido, foto, mensagens, arquivos, áudio/vídeo enviados, IP/user-agent da sessão, tokens de push
+• Finalidade: funcionalidade do app, conta, segurança
+• Criptografia em trânsito: sim (HTTPS)
+• Usuário pode pedir exclusão: sim (configurações / e-mail)
+• Venda de dados: não
+• Publicidade: não
+• Conta obrigatória: sim

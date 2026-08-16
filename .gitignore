@@ -13,3 +13,12 @@ coverage
 apps/api/prisma/*.db
 apps/api/prisma/*.db-journal
 uploads
+android/local.properties
+android/keystore.properties
+android/SAVE-THIS-KEY.txt
+*.jks
+*.keystore
+android/.idea
+android/.gradle
+android/app/build
+android/build

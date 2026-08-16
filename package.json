@@ -16,14 +16,27 @@
     "dev:web": "npm run dev -w @ebano/web",
     "dev:api": "npm run dev -w @ebano/api",
     "db:generate": "npm run db:generate -w @ebano/api",
-    "db:push": "npm run db:push -w @ebano/api"
+    "db:push": "npm run db:push -w @ebano/api",
+    "android:assets": "node scripts/generate-brand-assets.mjs",
+    "android:sync": "npx cap sync android",
+    "android:open": "npx cap open android",
+    "android:bundle": "npx cap sync android && npm run android:bundle:gradle",
+    "android:bundle:gradle": "cd android && gradlew.bat bundleRelease"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.5.0",
     "turbo": "^2.5.4",
     "typescript": "^5.8.3"
   },
   "engines": {
     "node": "22.x"
   },
-  "packageManager": "npm@11.16.0"
+  "packageManager": "npm@11.16.0",
+  "dependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/app": "^8.1.1",
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/splash-screen": "^8.0.2",
+    "@capacitor/status-bar": "^8.0.3"
+  }
 }

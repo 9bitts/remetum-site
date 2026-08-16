@@ -28,6 +28,17 @@ export default function HomePage() {
           Criar conta
         </Link>
       </div>
+      <p className="mt-10 flex flex-wrap justify-center gap-4 text-xs text-ebano-muted">
+        <Link href="/privacidade" className="hover:text-ebano-accent">
+          Privacidade
+        </Link>
+        <Link href="/termos" className="hover:text-ebano-accent">
+          Termos
+        </Link>
+        <Link href="/suporte" className="hover:text-ebano-accent">
+          Suporte
+        </Link>
+      </p>
       </main>
     </RedirectIfAuthed>
   );

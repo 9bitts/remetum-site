@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { Message } from "@ebano/shared";
 import { formatCallMessage, parseCallMessage } from "@ebano/shared";
 import { formatTime } from "@/lib/format";
+import { splitMessageLinks } from "@/lib/links";
 import { fileLooksLikePdf, mediaSrc, openMediaFile } from "@/lib/media";
 import { MediaLightbox } from "./MediaLightbox";
 
@@ -140,7 +141,21 @@ export function MessageBubble({
 
           {message.content && message.type === "text" ? (
             <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">
-              {message.content}
+              {splitMessageLinks(message.content).map((part, i) =>
+                part.type === "url" ? (
+                  <a
+                    key={`${part.value}-${i}`}
+                    href={part.value}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="break-all text-ebano-accent underline underline-offset-2"
+                  >
+                    {part.value}
+                  </a>
+                ) : (
+                  <span key={i}>{part.value}</span>
+                ),
+              )}
             </p>
           ) : null}
 

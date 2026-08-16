@@ -132,6 +132,20 @@ export function AuthForm({ mode }: { mode: Mode }) {
         </p>
       ) : null}
 
+      {isRegister ? (
+        <p className="text-xs leading-relaxed text-ebano-muted">
+          Ao cadastrar, você aceita os{" "}
+          <Link href="/termos" className="text-ebano-accent hover:underline">
+            Termos
+          </Link>{" "}
+          e a{" "}
+          <Link href="/privacidade" className="text-ebano-accent hover:underline">
+            Privacidade
+          </Link>
+          .
+        </p>
+      ) : null}
+
       <button
         type="submit"
         disabled={loading}

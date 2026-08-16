@@ -430,6 +430,28 @@ export function SettingsModal({
           ) : null}
         </div>
 
+        <h3 className="mb-2 text-sm font-medium text-ebano-accent">Legal</h3>
+        <div className="mb-6 flex flex-col gap-2 text-sm">
+          <a
+            href="/privacidade"
+            className="text-ebano-accent hover:underline"
+          >
+            Política de privacidade
+          </a>
+          <a href="/termos" className="text-ebano-accent hover:underline">
+            Termos de uso
+          </a>
+          <a href="/suporte" className="text-ebano-accent hover:underline">
+            Suporte
+          </a>
+          <a
+            href="mailto:hello@remetum.com?subject=Denúncia%20Remetum"
+            className="text-ebano-accent hover:underline"
+          >
+            Denunciar abuso
+          </a>
+        </div>
+
         <h3 className="mb-2 text-sm font-medium text-red-300">Zona de risco</h3>
         <input
           type="password"
