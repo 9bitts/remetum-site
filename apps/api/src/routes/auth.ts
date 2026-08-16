@@ -235,14 +235,24 @@ export async function authRoutes(app: FastifyInstance) {
     "/auth/me",
     { preHandler: [app.authenticate] },
     async (request, reply) => {
-      const user = await prisma.user.findUnique({
-        where: { id: request.userId! },
-      });
-      if (!user) {
-        return reply.code(401).send({ error: "Usuário não encontrado" });
+      try {
+        const user = await prisma.user.findUnique({
+          where: { id: request.userId! },
+        });
+        if (!user) {
+          return reply.code(401).send({ error: "Usuário não encontrado" });
+        }
+        try {
+          const withHandle = await ensureUserHandle(user);
+          return { user: toAuthUser(withHandle) };
+        } catch (err) {
+          request.log.error(err);
+          return { user: toAuthUser(user) };
+        }
+      } catch (err) {
+        request.log.error(err);
+        return reply.code(503).send({ error: "API temporariamente indisponível" });
       }
-      const withHandle = await ensureUserHandle(user);
-      return { user: toAuthUser(withHandle) };
     },
   );
 

@@ -8,9 +8,11 @@ export function getRedis(): Redis | null {
   if (client === undefined) {
     try {
       client = new Redis(config.redisUrl, {
-        maxRetriesPerRequest: 2,
+        maxRetriesPerRequest: 1,
         enableReadyCheck: true,
         lazyConnect: true,
+        connectTimeout: 4_000,
+        retryStrategy: (times) => (times > 3 ? null : Math.min(times * 200, 1000)),
       });
       void client.connect().catch((err) => {
         console.error("[redis] connect failed", err);

@@ -29,19 +29,26 @@ const AUTH_SKIP_REFRESH = new Set([
 
 let refreshInFlight: Promise<boolean> | null = null;
 
-export async function refreshSession(): Promise<boolean> {
+export async function refreshSession(signal?: AbortSignal): Promise<boolean> {
   if (refreshInFlight) return refreshInFlight;
   refreshInFlight = (async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8_000);
+    const onAbort = () => controller.abort();
+    signal?.addEventListener("abort", onAbort);
     try {
       const res = await fetch(`${API_URL}/auth/refresh`, {
         method: "POST",
         credentials: "include",
+        signal: controller.signal,
       });
       if (res.ok) connectSocket();
       return res.ok;
     } catch {
       return false;
     } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       refreshInFlight = null;
     }
   })();
@@ -55,7 +62,8 @@ export async function fetchWithAuth(
 ): Promise<Response> {
   const res = await fetch(input, { ...init, credentials: "include" });
   if (res.status !== 401 || !retryOn401) return res;
-  const ok = await refreshSession();
+  if (init.signal?.aborted) return res;
+  const ok = await refreshSession(init.signal ?? undefined);
   if (!ok) return res;
   return fetch(input, { ...init, credentials: "include" });
 }

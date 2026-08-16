@@ -14,20 +14,18 @@ import { uploadRoutes } from "./routes/uploads.js";
 import { mediaRoutes } from "./routes/media.js";
 import { pushRoutes } from "./routes/push.js";
 import { statusRoutes } from "./routes/status.js";
-import { createSocketServer } from "./sockets/index.js";
 import { config } from "./config.js";
 
 function syncSchemaInBackground(log: {
   info: (o: unknown, msg?: string) => void;
   error: (o: unknown, msg?: string) => void;
 }) {
-  // Never block listen/health — Railway marks the deploy failed if push hangs.
   const child = spawn(
     process.platform === "win32" ? "npx.cmd" : "npx",
     ["prisma", "db", "push", "--skip-generate"],
     {
       cwd: process.cwd(),
-      env: process.env,
+      env: { ...process.env, CI: "true" },
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -50,6 +48,13 @@ function syncSchemaInBackground(log: {
     }
     log.error({ code, stderr: stderr.slice(-2000) }, "prisma db push exited");
   });
+
+  const timer = setTimeout(() => {
+    if (child.exitCode !== null) return;
+    log.error("prisma db push timed out; killing so the API stays up");
+    child.kill("SIGKILL");
+  }, 45_000);
+  child.on("exit", () => clearTimeout(timer));
 }
 
 async function main() {
@@ -101,9 +106,15 @@ async function main() {
   await app.register(statusRoutes);
 
   await app.listen({ port: config.port, host: "0.0.0.0" });
-
-  createSocketServer(app.server, config.corsOrigins);
   app.log.info(`Remetum API listening on :${config.port}`);
+
+  try {
+    const { createSocketServer } = await import("./sockets/index.js");
+    createSocketServer(app.server, config.corsOrigins);
+  } catch (err) {
+    app.log.error({ err }, "socket server failed to start; HTTP still up");
+  }
+
   syncSchemaInBackground(app.log);
 }
 
