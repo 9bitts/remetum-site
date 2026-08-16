@@ -1,4 +1,5 @@
-import type { ConversationSummary, PublicUser } from "@ebano/shared";
+import type { ConversationSummary } from "@ebano/shared";
+import { formatCallMessage, parseCallMessage } from "@ebano/shared";
 
 export function conversationTitle(
   conversation: ConversationSummary,
@@ -14,7 +15,7 @@ export function conversationTitle(
 export function conversationPeer(
   conversation: ConversationSummary,
   currentUserId: string,
-): PublicUser | null {
+): ConversationSummary["participants"][number] | null {
   if (conversation.type !== "direct") return null;
   return conversation.participants.find((p) => p.id !== currentUserId) ?? null;
 }
@@ -44,6 +45,23 @@ export function formatLastSeen(iso: string | null) {
     hour: "2-digit",
     minute: "2-digit",
   })}`;
+}
+
+export function messagePreview(message: {
+  type: string;
+  content: string | null;
+  deletedAt?: string | null;
+} | null) {
+  if (!message) return "Sem mensagens";
+  if (message.deletedAt) return "Mensagem apagada";
+  if (message.type === "image") return "📷 Imagem";
+  if (message.type === "audio") return "🎤 Áudio";
+  if (message.type === "video") return "🎬 Vídeo";
+  if (message.type === "file") return "📎 Arquivo";
+  if (message.type === "call") {
+    return formatCallMessage(parseCallMessage(message.content), null);
+  }
+  return message.content || "Mensagem";
 }
 
 export function initials(name: string) {

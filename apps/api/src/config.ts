@@ -131,6 +131,16 @@ export const config = {
     apiKey: (process.env.LIVEKIT_API_KEY ?? "").trim(),
     apiSecret: (process.env.LIVEKIT_API_SECRET ?? "").trim(),
   },
+  webPublicUrl: (process.env.WEB_PUBLIC_URL ?? "http://localhost:3000").replace(
+    /\/$/,
+    "",
+  ),
+  redisUrl: (process.env.REDIS_URL ?? "").trim(),
+  mail: {
+    from: process.env.MAIL_FROM ?? "Remetum <hello@remetum.com>",
+    resendApiKey: (process.env.RESEND_API_KEY ?? "").trim(),
+    smtpUrl: (process.env.SMTP_URL ?? "").trim(),
+  },
 };
 
 export function r2Enabled() {

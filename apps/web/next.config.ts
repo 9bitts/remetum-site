@@ -23,6 +23,10 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [
       {
+        source: "/@:handle",
+        destination: "/u/:handle",
+      },
+      {
         source: "/media/:path*",
         destination: `${apiUrl}/media/:path*`,
       },

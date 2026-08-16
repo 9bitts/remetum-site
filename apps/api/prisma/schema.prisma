@@ -28,6 +28,7 @@ enum MessageType {
   file
   audio
   video
+  call
 }
 
 enum DeliveryStatus {
@@ -37,19 +38,23 @@ enum DeliveryStatus {
 }
 
 model User {
-  id           String     @id @default(cuid())
-  name         String
-  email        String     @unique
-  passwordHash String     @map("password_hash")
-  avatarUrl    String?    @map("avatar_url")
-  bio          String?
-  status       UserStatus @default(offline)
-  lastSeenAt   DateTime?  @map("last_seen_at")
-  createdAt    DateTime   @default(now()) @map("created_at")
+  id               String     @id @default(cuid())
+  name             String
+  email            String     @unique
+  passwordHash     String     @map("password_hash")
+  handle           String?    @unique
+  avatarUrl        String?    @map("avatar_url")
+  bio              String?
+  status           UserStatus @default(offline)
+  lastSeenAt       DateTime?  @map("last_seen_at")
+  emailVerifiedAt  DateTime?  @map("email_verified_at")
+  hideLastSeen     Boolean    @default(false) @map("hide_last_seen")
+  sendReadReceipts Boolean    @default(true) @map("send_read_receipts")
+  createdAt        DateTime   @default(now()) @map("created_at")
 
   participants      ConversationParticipant[]
   messages          Message[]
-  messageStatuses    MessageStatus[]
+  messageStatuses   MessageStatus[]
   pushSubscriptions PushSubscription[]
   reactions         MessageReaction[]
   statuses          StatusPost[]
@@ -58,6 +63,7 @@ model User {
   blocksReceived    UserBlock[]               @relation("BlocksReceived")
   refreshSessions   RefreshSession[]
   uploadedFiles     StoredFile[]
+  accountTokens     AccountToken[]
 
   @@map("users")
 }
@@ -69,6 +75,8 @@ model RefreshSession {
   familyId  String    @map("family_id")
   expiresAt DateTime  @map("expires_at")
   revokedAt DateTime? @map("revoked_at")
+  userAgent String?   @map("user_agent")
+  ip        String?
   createdAt DateTime  @default(now()) @map("created_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -76,6 +84,21 @@ model RefreshSession {
   @@index([userId])
   @@index([familyId])
   @@map("refresh_sessions")
+}
+
+model AccountToken {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  type      String
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@map("account_tokens")
 }
 
 model Conversation {

@@ -22,6 +22,9 @@ const AUTH_SKIP_REFRESH = new Set([
   "/auth/register",
   "/auth/refresh",
   "/auth/logout",
+  "/auth/forgot-password",
+  "/auth/reset-password",
+  "/auth/verify-email",
 ]);
 
 let refreshInFlight: Promise<boolean> | null = null;

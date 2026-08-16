@@ -192,7 +192,7 @@ export function NewChatModal({
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Buscar por nome"
+            placeholder="Buscar por nome ou @apelido"
             className="mb-3 w-full rounded-xl border border-white/10 bg-ebano-bg px-3 py-2 outline-none focus:border-ebano-accent"
           />
         ) : null}

@@ -12,7 +12,7 @@ Isso cria `DATABASE_URL` automaticamente (adicione a variável ao serviço `@eba
 - Root Directory: *(vazio / raiz do repo)*
 - Build: `npm run build --workspace=@ebano/api`
 Start: `npm run start --workspace=@ebano/api`  
-O start sobe o Node imediatamente; o `prisma db push` roda em background depois do listen (para o healthcheck do Railway não falhar).
+O start sobe o Node imediatamente; o `prisma db push` (sem apagar dados) roda em background depois do listen (para o healthcheck do Railway não falhar).
 
 Variáveis:
 
@@ -26,6 +26,11 @@ PORT=4000
 LIVEKIT_URL=wss://<seu-projeto>.livekit.cloud
 LIVEKIT_API_KEY=<key>
 LIVEKIT_API_SECRET=<secret>
+WEB_PUBLIC_URL=https://remetum.com
+REDIS_URL=<opcional, para várias réplicas>
+RESEND_API_KEY=<opcional>
+SMTP_URL=<opcional, smtp://user:pass@host:587>
+MAIL_FROM=Remetum <hello@remetum.com>
 ```
 
 `LIVEKIT_*` é opcional: sem isso o chat funciona; chamadas voz/vídeo ficam desabilitadas.

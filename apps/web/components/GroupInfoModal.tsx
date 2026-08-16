@@ -23,6 +23,7 @@ export function GroupInfoModal({
   const [name, setName] = useState(conversation.name ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const isAdmin = conversation.myRole === "admin";
 
   useEffect(() => {
@@ -117,8 +118,10 @@ export function GroupInfoModal({
 
   function copyInvite() {
     if (!conversation.inviteCode) return;
-    void navigator.clipboard.writeText(conversation.inviteCode);
-    alert(`Código de convite: ${conversation.inviteCode}`);
+    const url = `${window.location.origin}/join/${conversation.inviteCode}`;
+    void navigator.clipboard.writeText(url);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
   }
 
   return (
@@ -173,7 +176,7 @@ export function GroupInfoModal({
               onClick={copyInvite}
               className="flex-1 rounded-xl border border-white/10 px-3 py-2 text-sm text-ebano-accent hover:bg-white/5"
             >
-              Copiar convite
+              {copied ? "Link copiado" : "Copiar link de convite"}
             </button>
             {isAdmin ? (
               <button

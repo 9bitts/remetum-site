@@ -7,6 +7,7 @@ import {
   unblockUser,
 } from "../services/status.js";
 import { assertOwnedMedia } from "../services/uploads.js";
+import { assertHandle, ensureUserHandle } from "../services/handles.js";
 
 async function blockedIdSet(userId: string) {
   const blocked = await prisma.userBlock.findMany({
@@ -15,6 +16,16 @@ async function blockedIdSet(userId: string) {
     },
   });
   return new Set(blocked.flatMap((b) => [b.blockerId, b.blockedId]));
+}
+
+function nameOrHandleFilter(q: string) {
+  const handle = q.replace(/^@/, "").trim();
+  return {
+    OR: [
+      { name: { contains: q, mode: "insensitive" as const } },
+      { handle: { contains: handle, mode: "insensitive" as const } },
+    ],
+  };
 }
 
 export async function userRoutes(app: FastifyInstance) {
@@ -37,16 +48,16 @@ export async function userRoutes(app: FastifyInstance) {
       const users = await prisma.user.findMany({
         where: {
           id: { not: request.userId! },
-          ...(q.length > 0
-            ? { name: { contains: q, mode: "insensitive" } }
-            : {}),
+          ...(q.length > 0 ? nameOrHandleFilter(q) : {}),
         },
         orderBy: { name: "asc" },
         take,
       });
 
       return {
-        users: users.filter((u) => !blockedIds.has(u.id)).map(toPublicUser),
+        users: users
+          .filter((u) => !blockedIds.has(u.id))
+          .map((u) => toPublicUser(u, request.userId!)),
       };
     },
   );
@@ -71,7 +82,7 @@ export async function userRoutes(app: FastifyInstance) {
       const users = await prisma.user.findMany({
         where: {
           id: { not: request.userId! },
-          name: { contains: q, mode: "insensitive" },
+          ...nameOrHandleFilter(q),
         },
         take: 20,
         orderBy: { name: "asc" },
@@ -80,13 +91,41 @@ export async function userRoutes(app: FastifyInstance) {
       return {
         users: users
           .filter((u) => !blockedIds.has(u.id))
-          .map(toPublicUser),
+          .map((u) => toPublicUser(u, request.userId!)),
       };
     },
   );
 
+  app.get<{ Params: { handle: string } }>(
+    "/users/handle/:handle",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const handle = request.params.handle.trim().toLowerCase().replace(/^@/, "");
+      const user = await prisma.user.findUnique({ where: { handle } });
+      if (!user || user.id === request.userId) {
+        if (user?.id === request.userId) {
+          const withHandle = await ensureUserHandle(user);
+          return { user: toPublicUser(withHandle, request.userId) };
+        }
+        return reply.code(404).send({ error: "Pessoa não encontrada" });
+      }
+      const blocked = await blockedIdSet(request.userId!);
+      if (blocked.has(user.id)) {
+        return reply.code(404).send({ error: "Pessoa não encontrada" });
+      }
+      return { user: toPublicUser(user, request.userId!) };
+    },
+  );
+
   app.patch<{
-    Body: { name?: string; bio?: string | null; avatarUrl?: string | null };
+    Body: {
+      name?: string;
+      handle?: string;
+      bio?: string | null;
+      avatarUrl?: string | null;
+      hideLastSeen?: boolean;
+      sendReadReceipts?: boolean;
+    };
   }>("/users/me", { preHandler: [app.authenticate] }, async (request, reply) => {
     const body = request.body ?? {};
     if (body.name !== undefined && body.name.trim().length < 2) {
@@ -104,12 +143,30 @@ export async function userRoutes(app: FastifyInstance) {
       }
     }
 
+    let handle: string | undefined;
+    if (body.handle !== undefined) {
+      handle = assertHandle(body.handle);
+      const taken = await prisma.user.findFirst({
+        where: { handle, id: { not: request.userId! } },
+      });
+      if (taken) {
+        return reply.code(409).send({ error: "Este apelido já está em uso" });
+      }
+    }
+
     const user = await prisma.user.update({
       where: { id: request.userId! },
       data: {
         ...(body.name !== undefined ? { name: body.name.trim() } : {}),
+        ...(handle !== undefined ? { handle } : {}),
         ...(body.bio !== undefined ? { bio: body.bio } : {}),
         ...(body.avatarUrl !== undefined ? { avatarUrl: body.avatarUrl } : {}),
+        ...(body.hideLastSeen !== undefined
+          ? { hideLastSeen: body.hideLastSeen }
+          : {}),
+        ...(body.sendReadReceipts !== undefined
+          ? { sendReadReceipts: body.sendReadReceipts }
+          : {}),
       },
     });
 

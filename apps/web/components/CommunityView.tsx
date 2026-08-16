@@ -66,6 +66,7 @@ export function CommunityView({
       ? users.filter(
           (u) =>
             u.name.toLowerCase().includes(q) ||
+            (u.handle ?? "").toLowerCase().includes(q.replace(/^@/, "")) ||
             (u.bio ?? "").toLowerCase().includes(q),
         )
       : users;
@@ -129,6 +130,9 @@ export function CommunityView({
                 />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">{user.name}</p>
+                  {user.handle ? (
+                    <p className="text-[11px] text-ebano-accent">@{user.handle}</p>
+                  ) : null}
                   <p className="mt-0.5 line-clamp-2 text-xs text-ebano-muted">
                     {user.bio || "Sem bio"}
                   </p>

@@ -190,28 +190,24 @@ export function ChatView({
         </button>
 
         <div className="relative flex shrink-0 items-center gap-0.5" data-chat-menu>
-          {isDirect ? (
-            <>
-              <button
-                type="button"
-                onClick={onCallVoice}
-                className={iconBtn}
-                title="Chamada de voz"
-                aria-label="Chamada de voz"
-              >
-                <PhoneIcon />
-              </button>
-              <button
-                type="button"
-                onClick={onCallVideo}
-                className={iconBtn}
-                title="Chamada de vídeo"
-                aria-label="Chamada de vídeo"
-              >
-                <VideoIcon />
-              </button>
-            </>
-          ) : null}
+          <button
+            type="button"
+            onClick={onCallVoice}
+            className={iconBtn}
+            title="Chamada de voz"
+            aria-label="Chamada de voz"
+          >
+            <PhoneIcon />
+          </button>
+          <button
+            type="button"
+            onClick={onCallVideo}
+            className={iconBtn}
+            title="Chamada de vídeo"
+            aria-label="Chamada de vídeo"
+          >
+            <VideoIcon />
+          </button>
 
           <button
             type="button"
@@ -381,6 +377,7 @@ export function ChatView({
       </div>
 
       <Composer
+        conversationId={conversation.id}
         replyTo={replyTo}
         editing={editing}
         onCancelReply={onCancelReply}

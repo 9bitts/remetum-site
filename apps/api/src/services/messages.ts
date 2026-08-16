@@ -1,7 +1,11 @@
 import { prisma } from "../prisma.js";
 import { assertParticipant, isBlockedEither } from "./conversations.js";
 import { toMessage } from "../lib/serialize.js";
-import type { MessageType } from "@ebano/shared";
+import {
+  encodeCallMessage,
+  type CallMessageEvent,
+  type MessageType,
+} from "@ebano/shared";
 import { assertUsableMedia } from "./uploads.js";
 
 async function loadMessage(messageId: string) {
@@ -37,8 +41,25 @@ export async function createMessage(input: {
     }
   }
 
+  if (
+    input.type !== "text" &&
+    input.type !== "image" &&
+    input.type !== "file" &&
+    input.type !== "audio" &&
+    input.type !== "video" &&
+    input.type !== "call"
+  ) {
+    throw Object.assign(new Error("Tipo de mensagem inválido"), {
+      statusCode: 400,
+    });
+  }
   if (input.type === "text" && !input.content?.trim()) {
     throw Object.assign(new Error("Mensagem vazia"), { statusCode: 400 });
+  }
+  if (input.type === "call" && !input.content?.trim()) {
+    throw Object.assign(new Error("Evento de chamada inválido"), {
+      statusCode: 400,
+    });
   }
   if (input.content && input.content.length > MAX_CONTENT) {
     throw Object.assign(new Error("Mensagem muito longa"), { statusCode: 400 });
@@ -243,6 +264,11 @@ export async function forwardMessage(
   if (!original || original.deletedAt) {
     throw Object.assign(new Error("Mensagem não encontrada"), { statusCode: 404 });
   }
+  if (original.type === "call") {
+    throw Object.assign(new Error("Não é possível encaminhar este evento"), {
+      statusCode: 400,
+    });
+  }
   await assertParticipant(original.conversationId, userId);
 
   const uniqueTargets = [...new Set(targetConversationIds)].slice(0, MAX_FORWARD);
@@ -265,4 +291,28 @@ export async function forwardMessage(
     created.push(message);
   }
   return created;
+}
+
+export async function createCallEventMessage(input: {
+  conversationId: string;
+  senderId: string;
+  event: CallMessageEvent;
+  video: boolean;
+  durationMs?: number | null;
+}) {
+  return createMessage({
+    conversationId: input.conversationId,
+    senderId: input.senderId,
+    type: "call",
+    content: encodeCallMessage({ event: input.event, video: input.video }),
+    durationMs: input.durationMs ?? undefined,
+  });
+}
+
+export async function userSendsReadReceipts(userId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { sendReadReceipts: true },
+  });
+  return user?.sendReadReceipts !== false;
 }

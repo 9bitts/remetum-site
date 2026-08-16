@@ -13,22 +13,28 @@ export function toAuthUser(user: User): AuthUser {
     id: user.id,
     name: user.name,
     email: user.email,
+    handle: user.handle,
     avatarUrl: user.avatarUrl,
     bio: user.bio,
     status: user.status,
     lastSeenAt: user.lastSeenAt?.toISOString() ?? null,
+    emailVerifiedAt: user.emailVerifiedAt?.toISOString() ?? null,
+    hideLastSeen: user.hideLastSeen,
+    sendReadReceipts: user.sendReadReceipts,
     createdAt: user.createdAt.toISOString(),
   };
 }
 
-export function toPublicUser(user: User): PublicUser {
+export function toPublicUser(user: User, viewerId?: string): PublicUser {
+  const hideSeen = user.hideLastSeen && user.id !== viewerId;
   return {
     id: user.id,
     name: user.name,
+    handle: user.handle,
     avatarUrl: user.avatarUrl,
     bio: user.bio,
     status: user.status,
-    lastSeenAt: user.lastSeenAt?.toISOString() ?? null,
+    lastSeenAt: hideSeen ? null : (user.lastSeenAt?.toISOString() ?? null),
   };
 }
 
@@ -88,6 +94,14 @@ export function toMessage(
     status,
     reactions,
   };
+}
+
+export function visibleDeliveryStatus(
+  status: DeliveryStatus,
+  readerSendsReceipts: boolean | undefined,
+): DeliveryStatus {
+  if (status === "read" && readerSendsReceipts === false) return "delivered";
+  return status;
 }
 
 function summarizeReactions(

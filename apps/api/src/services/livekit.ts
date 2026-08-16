@@ -65,7 +65,7 @@ export async function ensureLivekitRoom(roomName: string) {
   try {
     await svc.createRoom({
       name: roomName,
-      maxParticipants: 4,
+      maxParticipants: 16,
       emptyTimeout: 60 * 10,
     });
   } catch (err) {

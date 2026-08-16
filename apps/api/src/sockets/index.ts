@@ -1,5 +1,6 @@
 import type { Server as HttpServer } from "node:http";
 import { Server, type Socket } from "socket.io";
+import { createAdapter } from "@socket.io/redis-adapter";
 import {
   SOCKET_EVENTS,
   type CallInvitePayload,
@@ -14,13 +15,16 @@ import {
 import { config } from "../config.js";
 import { verifyAccessToken } from "../services/tokens.js";
 import { prisma } from "../prisma.js";
+import { getRedis } from "../redis.js";
 import {
+  createCallEventMessage,
   createMessage,
   deleteMessageForEveryone,
   editMessage,
   markDeliveredForUser,
   markMessagesRead,
   toggleReaction,
+  userSendsReadReceipts,
 } from "../services/messages.js";
 import {
   getContactUserIds,
@@ -32,12 +36,15 @@ import {
 import { notifyCallEnded, notifyIncomingCall, notifyUsers } from "../services/push.js";
 import { assertParticipant, isBlockedEither } from "../services/conversations.js";
 import {
+  callDurationMs,
   createCall,
   endCall,
   getCall,
   getRingingCallsForCallee,
+  isCallMember,
+  patchCall,
   scheduleRingTimeout,
-  setCallStatus,
+  type CallRecord,
 } from "../services/calls.js";
 import {
   createLivekitToken,
@@ -77,6 +84,23 @@ export function createSocketServer(
     },
   });
 
+  const redis = getRedis();
+  if (redis) {
+    const sub = redis.duplicate();
+    void Promise.all([
+      redis.status === "ready" || redis.status === "connecting"
+        ? Promise.resolve()
+        : redis.connect(),
+      sub.connect(),
+    ])
+      .then(() => {
+        io.adapter(createAdapter(redis, sub));
+      })
+      .catch((err) => {
+        console.error("[socket] redis adapter failed", err);
+      });
+  }
+
   io.use(async (socket, next) => {
     try {
       const userId = await authenticateSocket(socket);
@@ -93,7 +117,7 @@ export function createSocketServer(
     const userId = socket.data.userId as string;
     socket.join(`user:${userId}`);
 
-    const count = trackSocket(userId, socket.id);
+    const count = await trackSocket(userId, socket.id);
     if (count === 1) {
       const user = await setUserOnline(userId);
       const contacts = await getContactUserIds(userId);
@@ -139,7 +163,7 @@ export function createSocketServer(
 
     socket.emit("ready", { socketId: socket.id, userId });
 
-    for (const call of getRingingCallsForCallee(userId)) {
+    for (const call of await getRingingCallsForCallee(userId)) {
       socket.emit(SOCKET_EVENTS.CALL_OFFER, {
         callId: call.callId,
         conversationId: call.conversationId,
@@ -147,11 +171,17 @@ export function createSocketServer(
         fromName: call.fromName,
         video: call.video,
         livekitUrl: getLivekitUrl(),
+        group: call.group,
       });
     }
 
     socket.on(SOCKET_EVENTS.MESSAGE_SEND, async (payload: MessageSendPayload) => {
       try {
+        if (payload.type === "call") {
+          throw Object.assign(new Error("Tipo de mensagem inválido"), {
+            statusCode: 400,
+          });
+        }
         const message = await createMessage({
           conversationId: payload.conversationId,
           senderId: userId,
@@ -276,6 +306,8 @@ export function createSocketServer(
           userId,
           payload.messageIds,
         );
+        const emitReceipts = await userSendsReadReceipts(userId);
+        if (!emitReceipts) return;
         for (const row of updated) {
           io.to(`user:${row.message.senderId}`).emit(
             SOCKET_EVENTS.MESSAGE_STATUS,
@@ -308,6 +340,43 @@ export function createSocketServer(
       }
     });
 
+    async function publishCallMessage(
+      call: CallRecord,
+      event: "missed" | "rejected" | "cancelled" | "ended" | "unavailable",
+    ) {
+      try {
+        const message = await createCallEventMessage({
+          conversationId: call.conversationId,
+          senderId: call.fromUserId,
+          event,
+          video: call.video,
+          durationMs: event === "ended" ? callDurationMs(call) : null,
+        });
+        io.to(`conversation:${call.conversationId}`).emit(
+          SOCKET_EVENTS.MESSAGE_NEW,
+          { message },
+        );
+      } catch (err) {
+        console.error("[call] failed to store call message", err);
+      }
+    }
+
+    function emitEnded(
+      call: CallRecord & { callId?: string },
+      callId: string,
+      reason: "rejected" | "cancelled" | "hangup" | "unavailable",
+      userIds: string[],
+    ) {
+      const ended = {
+        callId,
+        conversationId: call.conversationId,
+        reason,
+      };
+      for (const id of userIds) {
+        io.to(`user:${id}`).emit(SOCKET_EVENTS.CALL_ENDED, ended);
+      }
+    }
+
     socket.on(SOCKET_EVENTS.CALL_INVITE, async (payload: CallInvitePayload) => {
       try {
         if (!livekitConfigured()) {
@@ -323,46 +392,50 @@ export function createSocketServer(
           where: { id: payload.conversationId },
           include: { participants: { include: { user: true } } },
         });
-        if (!conversation || conversation.type !== "direct") {
-          throw Object.assign(new Error("Chamadas só em conversas diretas"), {
+        if (!conversation) {
+          throw Object.assign(new Error("Conversa não encontrada"), {
+            statusCode: 404,
+          });
+        }
+
+        const others = [];
+        for (const p of conversation.participants) {
+          if (p.userId === userId) continue;
+          if (await isBlockedEither(userId, p.userId)) continue;
+          others.push(p);
+        }
+        if (others.length === 0) {
+          throw Object.assign(new Error("Ninguém disponível para a chamada"), {
             statusCode: 400,
           });
         }
 
-        const other = conversation.participants.find((p) => p.userId !== userId);
-        if (!other) {
-          throw Object.assign(new Error("Destinatário não encontrado"), {
-            statusCode: 404,
-          });
-        }
-        if (await isBlockedEither(userId, other.userId)) {
-          throw Object.assign(new Error("Usuário bloqueado"), { statusCode: 403 });
-        }
-
         const me = conversation.participants.find((p) => p.userId === userId);
-        const fromName = me?.user.name ?? "Usuário";
-        const call = createCall({
+        const call = await createCall({
           conversationId: payload.conversationId,
           fromUserId: userId,
-          toUserId: other.userId,
-          fromName,
+          fromName: me?.user.name ?? "Usuário",
           video: Boolean(payload.video),
+          participantIds: [userId, ...others.map((p) => p.userId)],
+          group: conversation.type === "group",
         });
 
         const offer = {
           callId: call.callId,
           conversationId: payload.conversationId,
           fromUserId: userId,
-          fromName,
+          fromName: call.fromName,
           video: call.video,
           livekitUrl: getLivekitUrl(),
+          group: call.group,
         };
 
-        io.to(`user:${other.userId}`).emit(SOCKET_EVENTS.CALL_OFFER, offer);
-        // Caller also gets callId for cancel/hangup
+        for (const id of call.ringingIds) {
+          io.to(`user:${id}`).emit(SOCKET_EVENTS.CALL_OFFER, offer);
+        }
         socket.emit(SOCKET_EVENTS.CALL_OFFER, offer);
 
-        void notifyIncomingCall(other.userId, {
+        void notifyIncomingCall(call.ringingIds, {
           callId: call.callId,
           conversationId: payload.conversationId,
           fromName: offer.fromName,
@@ -370,28 +443,24 @@ export function createSocketServer(
         });
 
         scheduleRingTimeout(call.callId, () => {
-          const stillRinging = getCall(call.callId);
-          if (!stillRinging) return;
-          endCall(call.callId);
-          const ended = {
-            callId: call.callId,
-            conversationId: stillRinging.conversationId,
-            reason: "unavailable" as const,
-          };
-          io.to(`user:${stillRinging.fromUserId}`).emit(
-            SOCKET_EVENTS.CALL_ENDED,
-            ended,
-          );
-          io.to(`user:${stillRinging.toUserId}`).emit(
-            SOCKET_EVENTS.CALL_ENDED,
-            ended,
-          );
-          void notifyCallEnded(stillRinging.toUserId, {
-            callId: call.callId,
-            conversationId: stillRinging.conversationId,
-            reason: "unavailable",
-            fromName: stillRinging.fromName,
-          });
+          void (async () => {
+            const stillRinging = await getCall(call.callId);
+            if (!stillRinging || stillRinging.status !== "ringing") return;
+            await endCall(call.callId);
+            emitEnded(
+              stillRinging,
+              call.callId,
+              "unavailable",
+              stillRinging.participantIds,
+            );
+            void notifyCallEnded(stillRinging.ringingIds, {
+              callId: call.callId,
+              conversationId: stillRinging.conversationId,
+              reason: "unavailable",
+              fromName: stillRinging.fromName,
+            });
+            await publishCallMessage(stillRinging, "unavailable");
+          })();
         });
       } catch (err) {
         socket.emit(SOCKET_EVENTS.ERROR, {
@@ -403,26 +472,14 @@ export function createSocketServer(
 
     socket.on(SOCKET_EVENTS.CALL_ACCEPT, async (payload: CallSignalPayload) => {
       try {
-        const call = getCall(payload.callId);
+        const call = await getCall(payload.callId);
         if (!call || call.status === "ended") {
           throw Object.assign(new Error("Chamada não encontrada"), {
             statusCode: 404,
           });
         }
-        if (call.toUserId !== userId) {
+        if (!isCallMember(call, userId) || call.fromUserId === userId) {
           throw Object.assign(new Error("Sem permissão"), { statusCode: 403 });
-        }
-
-        setCallStatus(payload.callId, "active");
-
-        const [caller, callee] = await Promise.all([
-          prisma.user.findUnique({ where: { id: call.fromUserId } }),
-          prisma.user.findUnique({ where: { id: call.toUserId } }),
-        ]);
-        if (!caller || !callee) {
-          throw Object.assign(new Error("Usuário não encontrado"), {
-            statusCode: 404,
-          });
         }
 
         const livekitUrl = getLivekitUrl();
@@ -432,40 +489,53 @@ export function createSocketServer(
           });
         }
 
-        await ensureLivekitRoom(call.roomName);
+        const firstAccept = call.status === "ringing";
+        const ringingIds = call.ringingIds.filter((id) => id !== userId);
+        const joinedIds = call.joinedIds.includes(userId)
+          ? call.joinedIds
+          : [...call.joinedIds, userId];
 
-        const [callerToken, calleeToken] = await Promise.all([
-          createLivekitToken({
-            roomName: call.roomName,
-            identity: caller.id,
-            name: caller.name,
-          }),
-          createLivekitToken({
-            roomName: call.roomName,
-            identity: callee.id,
-            name: callee.name,
-          }),
-        ]);
+        const updated = await patchCall(payload.callId, {
+          status: "active",
+          ringingIds,
+          joinedIds,
+          startedAt: call.startedAt ?? new Date().toISOString(),
+        });
+        if (!updated) {
+          throw Object.assign(new Error("Chamada não encontrada"), {
+            statusCode: 404,
+          });
+        }
+
+        await ensureLivekitRoom(updated.roomName);
+
+        const users = await prisma.user.findMany({
+          where: { id: { in: firstAccept ? joinedIds : [userId] } },
+        });
 
         const base = {
           callId: payload.callId,
-          conversationId: call.conversationId,
+          conversationId: updated.conversationId,
           livekitUrl,
-          roomName: call.roomName,
-          video: call.video,
+          roomName: updated.roomName,
+          video: updated.video,
         };
 
-        io.to(`user:${call.fromUserId}`).emit(SOCKET_EVENTS.CALL_ACCEPTED, {
-          ...base,
-          token: callerToken,
-        });
-        io.to(`user:${call.toUserId}`).emit(SOCKET_EVENTS.CALL_ACCEPTED, {
-          ...base,
-          token: calleeToken,
-        });
-        void notifyCallEnded(call.toUserId, {
+        for (const member of users) {
+          const token = await createLivekitToken({
+            roomName: updated.roomName,
+            identity: member.id,
+            name: member.name,
+          });
+          io.to(`user:${member.id}`).emit(SOCKET_EVENTS.CALL_ACCEPTED, {
+            ...base,
+            token,
+          });
+        }
+
+        void notifyCallEnded(userId, {
           callId: payload.callId,
-          conversationId: call.conversationId,
+          conversationId: updated.conversationId,
           reason: "accepted",
         });
       } catch (err) {
@@ -476,39 +546,84 @@ export function createSocketServer(
       }
     });
 
-    const endCallWithReason = (
-      payload: CallSignalPayload,
-      reason: "rejected" | "cancelled" | "hangup",
-    ) => {
-      const call = getCall(payload.callId);
-      if (!call) return;
-      if (userId !== call.fromUserId && userId !== call.toUserId) return;
-      endCall(payload.callId);
-      const ended = {
+    socket.on(SOCKET_EVENTS.CALL_REJECT, async (payload: CallSignalPayload) => {
+      const call = await getCall(payload.callId);
+      if (!call || !isCallMember(call, userId)) return;
+      const ringingIds = call.ringingIds.filter((id) => id !== userId);
+      const nobodyJoined =
+        call.status === "ringing" &&
+        ringingIds.length === 0 &&
+        call.joinedIds.length <= 1;
+      io.to(`user:${userId}`).emit(SOCKET_EVENTS.CALL_ENDED, {
         callId: payload.callId,
         conversationId: call.conversationId,
-        reason,
-      };
-      io.to(`user:${call.fromUserId}`).emit(SOCKET_EVENTS.CALL_ENDED, ended);
-      io.to(`user:${call.toUserId}`).emit(SOCKET_EVENTS.CALL_ENDED, ended);
-      void notifyCallEnded(call.toUserId, {
+        reason: "rejected" as const,
+      });
+      void notifyCallEnded(userId, {
         callId: payload.callId,
         conversationId: call.conversationId,
-        reason,
+        reason: "rejected",
         fromName: call.fromName,
       });
-    };
-
-    socket.on(SOCKET_EVENTS.CALL_REJECT, (payload: CallSignalPayload) => {
-      endCallWithReason(payload, "rejected");
+      if (nobodyJoined) {
+        await endCall(payload.callId);
+        emitEnded(call, payload.callId, "rejected", call.participantIds);
+        await publishCallMessage(call, "rejected");
+        return;
+      }
+      await patchCall(payload.callId, { ringingIds });
     });
 
-    socket.on(SOCKET_EVENTS.CALL_CANCEL, (payload: CallSignalPayload) => {
-      endCallWithReason(payload, "cancelled");
+    socket.on(SOCKET_EVENTS.CALL_CANCEL, async (payload: CallSignalPayload) => {
+      const call = await getCall(payload.callId);
+      if (!call || call.fromUserId !== userId) return;
+      await endCall(payload.callId);
+      emitEnded(call, payload.callId, "cancelled", call.participantIds);
+      void notifyCallEnded(call.ringingIds, {
+        callId: payload.callId,
+        conversationId: call.conversationId,
+        reason: "cancelled",
+        fromName: call.fromName,
+      });
+      await publishCallMessage(call, "cancelled");
     });
 
-    socket.on(SOCKET_EVENTS.CALL_HANGUP, (payload: CallSignalPayload) => {
-      endCallWithReason(payload, "hangup");
+    socket.on(SOCKET_EVENTS.CALL_HANGUP, async (payload: CallSignalPayload) => {
+      const call = await getCall(payload.callId);
+      if (!call || !isCallMember(call, userId)) return;
+      const joinedIds = call.joinedIds.filter((id) => id !== userId);
+      const ringingIds = call.ringingIds.filter((id) => id !== userId);
+      const remaining = joinedIds.length;
+      if (call.status === "active" && remaining < 2) {
+        await endCall(payload.callId);
+        emitEnded(call, payload.callId, "hangup", call.participantIds);
+        void notifyCallEnded(
+          call.participantIds.filter((id) => id !== userId),
+          {
+            callId: payload.callId,
+            conversationId: call.conversationId,
+            reason: "hangup",
+            fromName: call.fromName,
+          },
+        );
+        await publishCallMessage(
+          { ...call, joinedIds, startedAt: call.startedAt },
+          "ended",
+        );
+        return;
+      }
+      if (call.status === "ringing" && userId === call.fromUserId) {
+        await endCall(payload.callId);
+        emitEnded(call, payload.callId, "cancelled", call.participantIds);
+        await publishCallMessage(call, "cancelled");
+        return;
+      }
+      await patchCall(payload.callId, { joinedIds, ringingIds });
+      io.to(`user:${userId}`).emit(SOCKET_EVENTS.CALL_ENDED, {
+        callId: payload.callId,
+        conversationId: call.conversationId,
+        reason: "hangup" as const,
+      });
     });
 
     socket.on(SOCKET_EVENTS.CONVERSATION_JOIN, async (conversationId: string) => {
@@ -525,7 +640,7 @@ export function createSocketServer(
     });
 
     socket.on("disconnect", async () => {
-      const remaining = untrackSocket(userId, socket.id);
+      const remaining = await untrackSocket(userId, socket.id);
       if (remaining === 0) {
         const user = await setUserOffline(userId);
         const contacts = await getContactUserIds(userId);

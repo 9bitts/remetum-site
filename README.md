@@ -36,10 +36,14 @@ npm run dev
 ## Funcionalidades (MVP)
 
 - Cadastro/login (JWT em cookies httpOnly)
-- Conversas 1:1 e grupos
-- Mensagens em tempo real (Socket.IO)
+- Recuperar senha, confirmar e-mail, sessões e exclusão de conta
+- Apelido (`@handle`) e link de perfil `/u/alguem`
+- Conversas 1:1 e grupos (convite por URL `/join/codigo`)
+- Comunidade: qualquer cadastrado vê e fala com todos
+- Mensagens em tempo real (Socket.IO) com fila offline no aparelho
 - Upload de imagem/arquivo (local ou Cloudflare R2)
 - Status de entrega/leitura, digitando…, presença online
+- Chamadas de voz/vídeo 1:1 e em grupo (LiveKit), com evento na conversa
 - Busca de conversas/usuários
 - PWA (manifest + service worker + Web Push opcional)
 

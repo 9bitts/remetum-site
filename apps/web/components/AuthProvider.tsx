@@ -145,7 +145,14 @@ export function RedirectIfAuthed({ children }: { children: ReactNode }) {
   const router = useRouter();
 
   useEffect(() => {
-    if (!loading && user) router.replace("/app");
+    if (loading || !user) return;
+    const params = new URLSearchParams(window.location.search);
+    const next = params.get("next");
+    const target =
+      next && next.startsWith("/") && !next.startsWith("//") && !next.includes("://")
+        ? next
+        : "/app";
+    router.replace(target.startsWith("/join/") || target.startsWith("/u/") || target.startsWith("/app") || target.startsWith("/verify-email") ? target : "/app");
   }, [loading, user, router]);
 
   if (loading) return <AuthLoading />;

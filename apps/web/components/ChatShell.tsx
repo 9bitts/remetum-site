@@ -29,6 +29,33 @@ import { CallOverlay, type CallUiState } from "./CallOverlay";
 import { registerPush, showLocalCallNotification, closeCallNotification } from "@/lib/push";
 import { conversationPeer, conversationTitle } from "@/lib/format";
 import { useStayInAppBack } from "@/lib/back-stack";
+import {
+  dequeueOutbox,
+  enqueueOutbox,
+  outboxForConversation,
+  readOutbox,
+  type OutboxItem,
+} from "@/lib/outbox";
+import { groupInviteUrl } from "@/lib/links";
+
+function outboxToMessage(item: OutboxItem, userId: string): Message {
+  return {
+    id: item.clientTempId,
+    conversationId: item.conversationId,
+    senderId: userId,
+    replyToId: item.replyToId ?? null,
+    replyTo: null,
+    content: item.content ?? null,
+    type: item.type,
+    mediaUrl: item.mediaUrl ?? null,
+    durationMs: item.durationMs ?? null,
+    createdAt: item.createdAt,
+    editedAt: null,
+    deletedAt: null,
+    status: "sent",
+    reactions: [],
+  };
+}
 
 function tempId() {
   return `tmp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -145,7 +172,18 @@ export function ChatShell() {
           return [...older, ...prev];
         });
       } else {
-        setMessages(res.messages);
+        const pending = user
+          ? outboxForConversation(conversationId).map((item) =>
+              outboxToMessage(item, user.id),
+            )
+          : [];
+        setMessages(() => {
+          const ids = new Set(res.messages.map((m) => m.id));
+          return [
+            ...res.messages,
+            ...pending.filter((m) => !ids.has(m.id)),
+          ];
+        });
         const unread = res.messages
           .filter(
             (m) =>
@@ -268,6 +306,7 @@ export function ChatShell() {
         });
       });
 
+      if (event.clientTempId) dequeueOutbox(event.clientTempId);
       if (selectedIdRef.current === msg.conversationId) {
         setMessages((prev) => {
           if (event.clientTempId) {
@@ -289,6 +328,7 @@ export function ChatShell() {
 
     const onSent = (event: MessageSentEvent) => {
       if (!event.clientTempId) return;
+      dequeueOutbox(event.clientTempId);
       setFailedTempIds((prev) => {
         if (!prev.has(event.clientTempId!)) return prev;
         const next = new Set(prev);
@@ -382,6 +422,9 @@ export function ChatShell() {
     const onCallAccepted = (accepted: CallAcceptedEvent) => {
       void closeCallNotification(accepted.callId);
       setCallState((prev) => {
+        if (prev?.phase === "active" && prev.accepted.callId === accepted.callId) {
+          return prev;
+        }
         let peerName = "Chamada";
         if (prev?.phase === "outgoing") peerName = prev.peerName;
         else if (prev?.phase === "incoming") peerName = prev.offer.fromName;
@@ -415,6 +458,11 @@ export function ChatShell() {
 
     const onConnect = () => {
       void syncAfterReconnect();
+      const socketNow = getSocket();
+      if (!socketNow.connected) return;
+      for (const item of readOutbox()) {
+        socketNow.emit(SOCKET_EVENTS.MESSAGE_SEND, item);
+      }
     };
 
     socket.on("connect", onConnect);
@@ -516,6 +564,16 @@ export function ChatShell() {
     };
     setMessages((prev) => [...prev, optimistic]);
     setReplyTo(null);
+    enqueueOutbox({
+      clientTempId,
+      conversationId: selectedId,
+      content: input.content,
+      type: input.type,
+      mediaUrl: input.mediaUrl,
+      durationMs: input.durationMs,
+      replyToId: input.replyToId,
+      createdAt: optimistic.createdAt,
+    });
     getSocket().emit(SOCKET_EVENTS.MESSAGE_SEND, {
       conversationId: selectedId,
       content: input.content,
@@ -559,7 +617,7 @@ export function ChatShell() {
   }
 
   function startCall(video: boolean) {
-    if (!selected || selected.type !== "direct" || !user) return;
+    if (!selected || !user) return;
     const peer = conversationPeer(selected, user.id);
     getSocket().emit(SOCKET_EVENTS.CALL_INVITE, {
       conversationId: selected.id,
@@ -570,7 +628,10 @@ export function ChatShell() {
       conversationId: selected.id,
       callId: null,
       video,
-      peerName: peer?.name ?? "Contato",
+      peerName:
+        selected.type === "group"
+          ? selected.name || "Grupo"
+          : peer?.name ?? "Contato",
     });
   }
 
@@ -690,7 +751,26 @@ export function ChatShell() {
   }
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-ebano-bg">
+    <div className="flex h-dvh flex-col overflow-hidden bg-ebano-bg">
+      {!user.emailVerifiedAt ? (
+        <div className="flex items-center justify-between gap-3 border-b border-white/5 bg-ebano-surface px-4 py-2 text-xs">
+          <p className="text-ebano-muted">Confirme seu e-mail para recuperar a conta se precisar.</p>
+          <button
+            type="button"
+            className="text-ebano-accent hover:underline"
+            onClick={() => {
+              void api("/auth/verify-email/resend", { method: "POST" })
+                .then(() => alert("Enviamos um novo link, se o e-mail estiver configurado."))
+                .catch((err) =>
+                  alert(err instanceof Error ? err.message : "Falha ao reenviar"),
+                );
+            }}
+          >
+            Reenviar
+          </button>
+        </div>
+      ) : null}
+      <div className="flex min-h-0 flex-1 overflow-hidden">
       <aside
         className={`w-full border-r border-white/5 md:w-[380px] md:shrink-0 ${
           mobileShowChat ? "hidden md:flex" : "flex"
@@ -849,8 +929,9 @@ export function ChatShell() {
             }}
             onCopyInvite={() => {
               if (!selected.inviteCode) return;
-              void navigator.clipboard.writeText(selected.inviteCode);
-              alert(`Código de convite: ${selected.inviteCode}`);
+              void navigator.clipboard.writeText(
+                groupInviteUrl(selected.inviteCode),
+              );
             }}
             onGroupInfo={() => setGroupInfoOpen(true)}
             onLeaveGroup={() => void leaveGroup()}
@@ -877,6 +958,7 @@ export function ChatShell() {
           </div>
         )}
       </section>
+      </div>
 
       <NewChatModal
         open={newChatOpen}
@@ -895,6 +977,7 @@ export function ChatShell() {
         onClose={() => setSettingsOpen(false)}
         user={user}
         onUserUpdated={setUser}
+        onLogout={() => void logout()}
       />
 
       {selected && selected.type === "group" ? (

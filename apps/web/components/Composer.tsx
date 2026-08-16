@@ -9,6 +9,7 @@ import { VoiceCapture } from "@/lib/voice-record";
 
 export function Composer({
   disabled,
+  conversationId,
   replyTo,
   editing,
   onCancelReply,
@@ -17,6 +18,7 @@ export function Composer({
   onTyping,
 }: {
   disabled?: boolean;
+  conversationId?: string;
   replyTo: Message | null;
   editing: Message | null;
   onCancelReply: () => void;
@@ -41,6 +43,24 @@ export function Composer({
   useEffect(() => {
     if (editing) setText(editing.content ?? "");
   }, [editing]);
+
+  useEffect(() => {
+    if (!conversationId || editing) return;
+    try {
+      setText(localStorage.getItem(`remetum:draft:${conversationId}`) ?? "");
+    } catch {
+      setText("");
+    }
+  }, [conversationId, editing]);
+
+  useEffect(() => {
+    if (!conversationId || editing) return;
+    try {
+      localStorage.setItem(`remetum:draft:${conversationId}`, text);
+    } catch {
+      // ignore quota
+    }
+  }, [conversationId, editing, text]);
 
   useEffect(() => {
     const session = capture.current;
@@ -82,6 +102,13 @@ export function Composer({
       replyToId: editing ? undefined : replyTo?.id,
     });
     setText("");
+    if (conversationId) {
+      try {
+        localStorage.removeItem(`remetum:draft:${conversationId}`);
+      } catch {
+        // ignore
+      }
+    }
     onTyping(false);
   }
 

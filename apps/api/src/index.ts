@@ -24,7 +24,7 @@ function syncSchemaInBackground(log: {
   // Never block listen/health — Railway marks the deploy failed if push hangs.
   const child = spawn(
     process.platform === "win32" ? "npx.cmd" : "npx",
-    ["prisma", "db", "push", "--skip-generate", "--accept-data-loss"],
+    ["prisma", "db", "push", "--skip-generate"],
     {
       cwd: process.cwd(),
       env: process.env,

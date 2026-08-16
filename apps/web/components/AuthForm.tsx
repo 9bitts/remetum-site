@@ -1,25 +1,29 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
 import type { AuthResponse } from "@ebano/shared";
 import { useAuth } from "./AuthProvider";
 import { connectSocket } from "@/lib/socket";
+import { safeNextPath } from "@/lib/links";
 
 type Mode = "login" | "register";
 
 export function AuthForm({ mode }: { mode: Mode }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { setUser } = useAuth();
   const [name, setName] = useState("");
+  const [handle, setHandle] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const isRegister = mode === "register";
+  const next = safeNextPath(searchParams.get("next")) ?? "/app";
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -30,12 +34,19 @@ export function AuthForm({ mode }: { mode: Mode }) {
       const data = await api<AuthResponse>(
         isRegister ? "/auth/register" : "/auth/login",
         {
-          body: isRegister ? { name, email, password } : { email, password },
+          body: isRegister
+            ? {
+                name,
+                email,
+                password,
+                ...(handle.trim() ? { handle: handle.trim() } : {}),
+              }
+            : { email, password },
         },
       );
       setUser(data.user);
       connectSocket();
-      router.replace("/app");
+      router.replace(next);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Erro inesperado");
     } finally {
@@ -63,17 +74,31 @@ export function AuthForm({ mode }: { mode: Mode }) {
       </div>
 
       {isRegister ? (
-        <label className="block space-y-1.5">
-          <span className="text-sm text-ebano-muted">Nome</span>
-          <input
-            required
-            minLength={2}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="w-full rounded-xl border border-white/10 bg-ebano-bg px-3 py-2.5 text-ebano-text outline-none focus:border-ebano-accent"
-            autoComplete="name"
-          />
-        </label>
+        <>
+          <label className="block space-y-1.5">
+            <span className="text-sm text-ebano-muted">Nome</span>
+            <input
+              required
+              minLength={2}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full rounded-xl border border-white/10 bg-ebano-bg px-3 py-2.5 text-ebano-text outline-none focus:border-ebano-accent"
+              autoComplete="name"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-sm text-ebano-muted">Apelido (opcional)</span>
+            <input
+              value={handle}
+              onChange={(e) => setHandle(e.target.value)}
+              placeholder="seu_nome"
+              minLength={3}
+              maxLength={24}
+              className="w-full rounded-xl border border-white/10 bg-ebano-bg px-3 py-2.5 text-ebano-text outline-none focus:border-ebano-accent"
+              autoComplete="username"
+            />
+          </label>
+        </>
       ) : null}
 
       <label className="block space-y-1.5">
@@ -115,18 +140,39 @@ export function AuthForm({ mode }: { mode: Mode }) {
         {loading ? "Aguarde…" : isRegister ? "Cadastrar" : "Entrar"}
       </button>
 
+      {!isRegister ? (
+        <p className="text-center text-sm text-ebano-muted">
+          <Link
+            href="/forgot-password"
+            className="text-ebano-accent hover:underline"
+          >
+            Esqueci a senha
+          </Link>
+        </p>
+      ) : null}
+
       <p className="text-center text-sm text-ebano-muted">
         {isRegister ? (
           <>
             Já tem conta?{" "}
-            <Link href="/login" className="text-ebano-accent hover:underline">
+            <Link
+              href={next !== "/app" ? `/login?next=${encodeURIComponent(next)}` : "/login"}
+              className="text-ebano-accent hover:underline"
+            >
               Entrar
             </Link>
           </>
         ) : (
           <>
             Novo por aqui?{" "}
-            <Link href="/register" className="text-ebano-accent hover:underline">
+            <Link
+              href={
+                next !== "/app"
+                  ? `/register?next=${encodeURIComponent(next)}`
+                  : "/register"
+              }
+              className="text-ebano-accent hover:underline"
+            >
               Criar conta
             </Link>
           </>

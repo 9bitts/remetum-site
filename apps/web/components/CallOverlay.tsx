@@ -62,9 +62,13 @@ export function CallOverlay({
   const [facing, setFacing] = useState<CameraFacing>("user");
   const [flipping, setFlipping] = useState(false);
   const [flipError, setFlipError] = useState<string | null>(null);
+  const [remotes, setRemotes] = useState<Array<{ id: string; name: string }>>(
+    [],
+  );
   const roomRef = useRef<Room | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const remoteVideos = useRef<Map<string, HTMLVideoElement>>(new Map());
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
@@ -84,21 +88,36 @@ export function CallOverlay({
       },
     });
     roomRef.current = room;
+    setRemotes([]);
+
+    function syncRemotes() {
+      const next = [...room.remoteParticipants.values()].map((p) => ({
+        id: p.identity,
+        name: p.name || p.identity,
+      }));
+      setRemotes(next);
+    }
 
     function attachRemote(
       track: RemoteTrack,
       _publication: RemoteTrackPublication,
-      _participant: RemoteParticipant,
+      participant: RemoteParticipant,
     ) {
-      if (track.kind === Track.Kind.Video && remoteVideoRef.current) {
-        track.attach(remoteVideoRef.current);
+      if (track.kind === Track.Kind.Video) {
+        const el =
+          remoteVideos.current.get(participant.identity) ??
+          remoteVideoRef.current;
+        if (el) track.attach(el);
       }
       if (track.kind === Track.Kind.Audio && remoteAudioRef.current) {
         track.attach(remoteAudioRef.current);
       }
+      syncRemotes();
     }
 
     room.on(RoomEvent.TrackSubscribed, attachRemote);
+    room.on(RoomEvent.ParticipantConnected, syncRemotes);
+    room.on(RoomEvent.ParticipantDisconnected, syncRemotes);
 
     void (async () => {
       try {
@@ -114,6 +133,7 @@ export function CallOverlay({
           });
         }
         attachLocalCamera(room, localVideoRef.current);
+        syncRemotes();
         for (const participant of room.remoteParticipants.values()) {
           for (const pub of participant.trackPublications.values()) {
             if (pub.track) {
@@ -137,10 +157,27 @@ export function CallOverlay({
     return () => {
       cancelled = true;
       room.off(RoomEvent.TrackSubscribed, attachRemote);
+      room.off(RoomEvent.ParticipantConnected, syncRemotes);
+      room.off(RoomEvent.ParticipantDisconnected, syncRemotes);
       void room.disconnect();
       roomRef.current = null;
     };
   }, [state]);
+
+  useEffect(() => {
+    const room = roomRef.current;
+    if (!room) return;
+    for (const participant of room.remoteParticipants.values()) {
+      for (const pub of participant.trackPublications.values()) {
+        if (pub.track?.kind === Track.Kind.Video) {
+          const el =
+            remoteVideos.current.get(participant.identity) ??
+            remoteVideoRef.current;
+          if (el) pub.track.attach(el);
+        }
+      }
+    }
+  }, [remotes]);
 
   const incomingCallId =
     state?.phase === "incoming" ? state.offer.callId : null;
@@ -301,12 +338,29 @@ export function CallOverlay({
     <div className="fixed inset-0 z-[60] flex flex-col bg-[#0B0B0D]">
       <div className="relative flex-1 overflow-hidden">
         {video ? (
-          <video
-            ref={remoteVideoRef}
-            autoPlay
-            playsInline
-            className="h-full w-full object-cover"
-          />
+          remotes.length > 1 ? (
+            <div className="grid h-full grid-cols-2 gap-1 bg-black p-1">
+              {remotes.map((remote) => (
+                <video
+                  key={remote.id}
+                  ref={(el) => {
+                    if (el) remoteVideos.current.set(remote.id, el);
+                    else remoteVideos.current.delete(remote.id);
+                  }}
+                  autoPlay
+                  playsInline
+                  className="h-full w-full object-cover"
+                />
+              ))}
+            </div>
+          ) : (
+            <video
+              ref={remoteVideoRef}
+              autoPlay
+              playsInline
+              className="h-full w-full object-cover"
+            />
+          )
         ) : (
           <div className="flex h-full flex-col items-center justify-center bg-gradient-to-b from-[#1a1610] to-[#0B0B0D]">
             <div className="flex h-32 w-32 items-center justify-center rounded-full bg-[#C9A227]/15 ring-1 ring-[#C9A227]/40">

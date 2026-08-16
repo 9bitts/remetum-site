@@ -148,5 +148,5 @@ export async function listBlocked(blockerId: string) {
     where: { blockerId },
     include: { blocked: true },
   });
-  return rows.map((r) => toPublicUser(r.blocked));
+  return rows.map((r) => toPublicUser(r.blocked, blockerId));
 }

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { prisma } from "../prisma.js";
-import { toMessage, toPublicUser } from "../lib/serialize.js";
+import { toMessage, toPublicUser, visibleDeliveryStatus } from "../lib/serialize.js";
 import type {
   ConversationSummary,
   Message as SharedMessage,
@@ -239,9 +239,10 @@ function toSummaryParticipant(
     role: ParticipantRole;
     user: Parameters<typeof toPublicUser>[0];
   },
+  viewerId: string,
 ): ConversationSummary["participants"][number] {
   return {
-    ...toPublicUser(p.user),
+    ...toPublicUser(p.user, viewerId),
     role: p.role,
   };
 }
@@ -281,25 +282,33 @@ async function buildSummary(
 
   let lastMessage: SharedMessage | null = null;
   if (last) {
-    const status =
-      last.senderId === userId
-        ? (
-            await prisma.messageStatus.findFirst({
-              where: {
-                messageId: last.id,
-                userId: { not: userId },
-              },
-              orderBy: { updatedAt: "desc" },
-            })
-          )?.status
-        : (
-            await prisma.messageStatus.findUnique({
-              where: {
-                messageId_userId: { messageId: last.id, userId },
-              },
-            })
-          )?.status;
-    lastMessage = toMessage(last, status ?? undefined, userId);
+    const peerStatuses = await prisma.messageStatus.findMany({
+      where: last.senderId === userId
+        ? { messageId: last.id, userId: { not: userId } }
+        : { messageId: last.id, userId },
+    });
+    const readers = await prisma.user.findMany({
+      where: { id: { in: peerStatuses.map((s) => s.userId) } },
+      select: { id: true, sendReadReceipts: true },
+    });
+    const receipts = new Map(readers.map((r) => [r.id, r.sendReadReceipts]));
+    let status: SharedMessage["status"];
+    if (last.senderId === userId) {
+      const rank = { sent: 0, delivered: 1, read: 2 } as const;
+      status = peerStatuses.reduce<"sent" | "delivered" | "read">(
+        (acc, cur) => {
+          const visible = visibleDeliveryStatus(
+            cur.status,
+            receipts.get(cur.userId),
+          );
+          return rank[visible] > rank[acc] ? visible : acc;
+        },
+        "sent",
+      );
+    } else {
+      status = peerStatuses[0]?.status;
+    }
+    lastMessage = toMessage(last, status, userId);
   }
 
   return {
@@ -307,14 +316,13 @@ async function buildSummary(
     type: row.type,
     name: row.name,
     avatarUrl: row.avatarUrl,
-    inviteCode:
-      row.type === "group" && mine.role === "admin" ? row.inviteCode : null,
+    inviteCode: row.type === "group" ? row.inviteCode : null,
     createdAt: row.createdAt.toISOString(),
     pinnedAt: mine.pinnedAt?.toISOString() ?? null,
     archivedAt: mine.archivedAt?.toISOString() ?? null,
     mutedUntil: mine.mutedUntil?.toISOString() ?? null,
     myRole: mine.role,
-    participants: row.participants.map(toSummaryParticipant),
+    participants: row.participants.map((p) => toSummaryParticipant(p, userId)),
     lastMessage,
     unreadCount: await unreadCount(row.id, userId, cutoff),
   };
@@ -468,6 +476,14 @@ export async function listMessages(
   const statuses = await prisma.messageStatus.findMany({
     where: { messageId: { in: slice.map((m) => m.id) } },
   });
+  const readerIds = [...new Set(statuses.map((s) => s.userId))];
+  const readers = readerIds.length
+    ? await prisma.user.findMany({
+        where: { id: { in: readerIds } },
+        select: { id: true, sendReadReceipts: true },
+      })
+    : [];
+  const receipts = new Map(readers.map((r) => [r.id, r.sendReadReceipts]));
 
   const mapped = slice.map((m) => {
     if (m.senderId === userId) {
@@ -476,7 +492,13 @@ export async function listMessages(
       );
       const rank = { sent: 0, delivered: 1, read: 2 } as const;
       const best = peerStatuses.reduce<"sent" | "delivered" | "read">(
-        (acc, cur) => (rank[cur.status] > rank[acc] ? cur.status : acc),
+        (acc, cur) => {
+          const visible = visibleDeliveryStatus(
+            cur.status,
+            receipts.get(cur.userId),
+          );
+          return rank[visible] > rank[acc] ? visible : acc;
+        },
         "sent",
       );
       return toMessage(m, best, userId);

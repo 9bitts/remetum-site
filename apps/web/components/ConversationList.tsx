@@ -6,6 +6,7 @@ import {
   conversationPeer,
   conversationTitle,
   formatTime,
+  messagePreview,
 } from "@/lib/format";
 
 export function ConversationList({
@@ -92,7 +93,7 @@ export function ConversationList({
                     </span>
                   </div>
                   <p className="mt-0.5 truncate text-xs text-ebano-muted">
-                    {m.content || "Mensagem"}
+                    {messagePreview(m)}
                   </p>
                 </button>
               );
@@ -143,17 +144,7 @@ export function ConversationList({
                 </div>
                 <div className="mt-0.5 flex items-center justify-between gap-2">
                   <p className="truncate text-sm text-ebano-muted">
-                    {c.lastMessage?.deletedAt
-                      ? "Mensagem apagada"
-                      : c.lastMessage?.type === "image"
-                        ? "📷 Imagem"
-                        : c.lastMessage?.type === "audio"
-                          ? "🎤 Áudio"
-                          : c.lastMessage?.type === "video"
-                            ? "🎬 Vídeo"
-                            : c.lastMessage?.type === "file"
-                              ? "📎 Arquivo"
-                              : c.lastMessage?.content || "Sem mensagens"}
+                    {messagePreview(c.lastMessage)}
                   </p>
                   {c.unreadCount > 0 ? (
                     <span className="min-w-[1.25rem] rounded-full bg-ebano-accent px-1.5 py-0.5 text-center text-[10px] font-semibold text-ebano-bg">

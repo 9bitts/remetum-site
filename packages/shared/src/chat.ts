@@ -12,6 +12,7 @@ export interface ConversationSummary {
   participants: Array<{
     id: string;
     name: string;
+    handle: string | null;
     avatarUrl: string | null;
     bio: string | null;
     status: "online" | "offline";
@@ -27,10 +28,10 @@ export interface ConversationSummary {
       id: string;
       senderId: string;
       content: string | null;
-      type: "text" | "image" | "file" | "audio" | "video";
+      type: "text" | "image" | "file" | "audio" | "video" | "call";
     } | null;
     content: string | null;
-    type: "text" | "image" | "file" | "audio" | "video";
+    type: "text" | "image" | "file" | "audio" | "video" | "call";
     mediaUrl: string | null;
     durationMs: number | null;
     createdAt: string;
@@ -60,8 +61,11 @@ export interface CreateGroupInput {
 
 export interface UpdateProfileInput {
   name?: string;
+  handle?: string;
   bio?: string | null;
   avatarUrl?: string | null;
+  hideLastSeen?: boolean;
+  sendReadReceipts?: boolean;
 }
 
 export interface StatusItem {
@@ -69,7 +73,7 @@ export interface StatusItem {
   userId: string;
   userName: string;
   userAvatarUrl: string | null;
-  type: "text" | "image" | "file" | "audio" | "video";
+  type: "text" | "image" | "file" | "audio" | "video" | "call";
   content: string | null;
   mediaUrl: string | null;
   createdAt: string;
@@ -95,6 +99,7 @@ export interface CallOfferEvent {
   fromName: string;
   video: boolean;
   livekitUrl: string | null;
+  group: boolean;
 }
 
 export interface CallAcceptedEvent {

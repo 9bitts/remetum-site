@@ -1,16 +1,17 @@
 import { prisma } from "../prisma.js";
 import { toPublicUser } from "../lib/serialize.js";
+import { getRedis } from "../redis.js";
 
 const onlineSockets = new Map<string, Set<string>>();
 
-export function trackSocket(userId: string, socketId: string) {
+function memoryTrack(userId: string, socketId: string) {
   const set = onlineSockets.get(userId) ?? new Set<string>();
   set.add(socketId);
   onlineSockets.set(userId, set);
   return set.size;
 }
 
-export function untrackSocket(userId: string, socketId: string) {
+function memoryUntrack(userId: string, socketId: string) {
   const set = onlineSockets.get(userId);
   if (!set) return 0;
   set.delete(socketId);
@@ -18,8 +19,36 @@ export function untrackSocket(userId: string, socketId: string) {
   return set.size;
 }
 
-export function isUserOnline(userId: string) {
-  return (onlineSockets.get(userId)?.size ?? 0) > 0;
+export async function trackSocket(userId: string, socketId: string) {
+  const redis = getRedis();
+  if (!redis) return memoryTrack(userId, socketId);
+  try {
+    await redis.sadd(`remetum:online:${userId}`, socketId);
+    return await redis.scard(`remetum:online:${userId}`);
+  } catch {
+    return memoryTrack(userId, socketId);
+  }
+}
+
+export async function untrackSocket(userId: string, socketId: string) {
+  const redis = getRedis();
+  if (!redis) return memoryUntrack(userId, socketId);
+  try {
+    await redis.srem(`remetum:online:${userId}`, socketId);
+    return await redis.scard(`remetum:online:${userId}`);
+  } catch {
+    return memoryUntrack(userId, socketId);
+  }
+}
+
+export async function isUserOnline(userId: string) {
+  const redis = getRedis();
+  if (!redis) return (onlineSockets.get(userId)?.size ?? 0) > 0;
+  try {
+    return (await redis.scard(`remetum:online:${userId}`)) > 0;
+  } catch {
+    return (onlineSockets.get(userId)?.size ?? 0) > 0;
+  }
 }
 
 export async function setUserOnline(userId: string) {

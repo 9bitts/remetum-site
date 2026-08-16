@@ -3,7 +3,25 @@ export type {
   RegisterInput,
   LoginInput,
   AuthResponse,
+  AuthSession,
 } from "./auth";
+
+export {
+  HANDLE_MIN,
+  HANDLE_MAX,
+  HANDLE_RE,
+  RESERVED_HANDLES,
+  normalizeHandle,
+  suggestHandle,
+  isValidHandle,
+} from "./handle";
+
+export type { CallMessageEvent, CallMessagePayload } from "./call-message";
+export {
+  encodeCallMessage,
+  parseCallMessage,
+  formatCallMessage,
+} from "./call-message";
 
 export type {
   ConversationSummary,
@@ -26,7 +44,7 @@ export type ConversationType = "direct" | "group";
 
 export type ParticipantRole = "member" | "admin";
 
-export type MessageType = "text" | "image" | "file" | "audio" | "video";
+export type MessageType = "text" | "image" | "file" | "audio" | "video" | "call";
 
 export type DeliveryStatus = "sent" | "delivered" | "read";
 
@@ -34,16 +52,21 @@ export interface User {
   id: string;
   name: string;
   email: string;
+  handle: string | null;
   avatarUrl: string | null;
   bio: string | null;
   status: UserStatus;
   lastSeenAt: string | null;
+  emailVerifiedAt: string | null;
+  hideLastSeen: boolean;
+  sendReadReceipts: boolean;
   createdAt: string;
 }
 
 export interface PublicUser {
   id: string;
   name: string;
+  handle: string | null;
   avatarUrl: string | null;
   bio: string | null;
   status: UserStatus;

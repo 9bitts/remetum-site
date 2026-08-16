@@ -20,7 +20,11 @@ function isMissingSessionTable(err: unknown) {
   );
 }
 
-export async function issueAuthTokens(userId: string, email: string) {
+export async function issueAuthTokens(
+  userId: string,
+  email: string,
+  meta?: { userAgent?: string | null; ip?: string | null },
+) {
   const familyId = randomUUID();
   const jti = randomUUID();
   const [accessToken, refresh] = await Promise.all([
@@ -36,6 +40,8 @@ export async function issueAuthTokens(userId: string, email: string) {
         tokenHash: hashToken(refresh.token),
         familyId,
         expiresAt,
+        userAgent: meta?.userAgent?.slice(0, 240) ?? null,
+        ip: meta?.ip?.slice(0, 64) ?? null,
       },
     });
   } catch (err) {
@@ -58,6 +64,8 @@ export async function rotateRefreshToken(rawToken: string) {
     familyId: string;
     expiresAt: Date;
     revokedAt: Date | null;
+    userAgent: string | null;
+    ip: string | null;
   } | null = null;
 
   try {
@@ -125,6 +133,8 @@ export async function rotateRefreshToken(rawToken: string) {
         tokenHash: hashToken(refresh.token),
         familyId: session.familyId,
         expiresAt,
+        userAgent: session.userAgent,
+        ip: session.ip,
       },
     }),
   ]);

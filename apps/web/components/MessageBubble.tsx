@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { Message } from "@ebano/shared";
+import { formatCallMessage, parseCallMessage } from "@ebano/shared";
 import { formatTime } from "@/lib/format";
 import { fileLooksLikePdf, mediaSrc, openMediaFile } from "@/lib/media";
 import { MediaLightbox } from "./MediaLightbox";
@@ -34,6 +35,16 @@ export function MessageBubble({
         <div className="rounded-[var(--radius-ebano)] bg-ebano-surface/60 px-3 py-2 text-sm italic text-ebano-muted">
           Mensagem apagada
         </div>
+      </div>
+    );
+  }
+
+  if (message.type === "call") {
+    return (
+      <div className="flex justify-center py-1">
+        <span className="rounded-full bg-white/5 px-3 py-1 text-xs text-ebano-muted">
+          {formatCallMessage(parseCallMessage(message.content), message.durationMs)}
+        </span>
       </div>
     );
   }

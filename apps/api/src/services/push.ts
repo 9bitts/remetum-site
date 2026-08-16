@@ -63,7 +63,11 @@ export async function notifyUsers(
 
   const targetIds = options?.evenIfOnline
     ? userIds
-    : userIds.filter((id) => !isUserOnline(id));
+    : (
+        await Promise.all(
+          userIds.map(async (id) => ((await isUserOnline(id)) ? null : id)),
+        )
+      ).filter((id): id is string => Boolean(id));
   if (targetIds.length === 0) return;
 
   const subs = await prisma.pushSubscription.findMany({
@@ -91,7 +95,7 @@ export async function notifyUsers(
 }
 
 export async function notifyIncomingCall(
-  userId: string,
+  userIds: string | string[],
   input: {
     callId: string;
     conversationId: string;
@@ -99,13 +103,14 @@ export async function notifyIncomingCall(
     video: boolean;
   },
 ) {
+  const ids = Array.isArray(userIds) ? userIds : [userIds];
   const kind = input.video ? "chamada de vídeo" : "chamada de voz";
   await notifyUsers(
-    [userId],
+    ids,
     {
       title: "Remetum",
       body: `${input.fromName} está ligando (${kind})`,
-      url: `/app?c=${encodeURIComponent(input.conversationId)}`,
+      url: `/app?c=${encodeURIComponent(input.conversationId)}&call=${encodeURIComponent(input.callId)}`,
       type: "call",
       callId: input.callId,
       tag: `call-${input.callId}`,
@@ -119,7 +124,7 @@ export async function notifyIncomingCall(
 }
 
 export async function notifyCallEnded(
-  userId: string,
+  userIds: string | string[],
   input: {
     callId: string;
     conversationId: string;
@@ -127,6 +132,7 @@ export async function notifyCallEnded(
     fromName?: string;
   },
 ) {
+  const ids = Array.isArray(userIds) ? userIds : [userIds];
   const missed =
     input.reason === "cancelled" || input.reason === "unavailable";
   const body = missed
@@ -136,7 +142,7 @@ export async function notifyCallEnded(
     : "Chamada encerrada";
 
   await notifyUsers(
-    [userId],
+    ids,
     {
       title: missed ? "Chamada perdida" : "Remetum",
       body,

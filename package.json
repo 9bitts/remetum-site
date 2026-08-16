@@ -11,6 +11,7 @@
     "dev": "turbo run dev",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
+    "test": "npm run test -w @ebano/api",
     "lint": "turbo run lint",
     "dev:web": "npm run dev -w @ebano/web",
     "dev:api": "npm run dev -w @ebano/api",

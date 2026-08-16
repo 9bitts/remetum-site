@@ -1,22 +1,64 @@
 import { randomBytes } from "node:crypto";
+import { getRedis } from "../redis.js";
 
 export type CallStatus = "ringing" | "active" | "ended";
 
 export type CallRecord = {
   conversationId: string;
   fromUserId: string;
-  toUserId: string;
   fromName: string;
   video: boolean;
   roomName: string;
   status: CallStatus;
+  participantIds: string[];
+  ringingIds: string[];
+  joinedIds: string[];
+  startedAt: string | null;
+  group: boolean;
 };
 
-const calls = new Map<string, CallRecord>();
+const memory = new Map<string, CallRecord>();
 const ringTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 const RING_TIMEOUT_MS = 45_000;
+const CALL_KEY = "remetum:call:";
+const CALL_INDEX = "remetum:calls";
 
-function clearRingTimeout(callId: string) {
+function clone(record: CallRecord): CallRecord {
+  return {
+    ...record,
+    participantIds: [...record.participantIds],
+    ringingIds: [...record.ringingIds],
+    joinedIds: [...record.joinedIds],
+  };
+}
+
+async function persist(callId: string, record: CallRecord) {
+  memory.set(callId, record);
+  const redis = getRedis();
+  if (!redis) return;
+  try {
+    await redis
+      .multi()
+      .set(`${CALL_KEY}${callId}`, JSON.stringify(record), "EX", 60 * 30)
+      .sadd(CALL_INDEX, callId)
+      .exec();
+  } catch (err) {
+    console.error("[calls] redis persist failed", err);
+  }
+}
+
+async function removeStored(callId: string) {
+  memory.delete(callId);
+  const redis = getRedis();
+  if (!redis) return;
+  try {
+    await redis.multi().del(`${CALL_KEY}${callId}`).srem(CALL_INDEX, callId).exec();
+  } catch (err) {
+    console.error("[calls] redis remove failed", err);
+  }
+}
+
+export function clearRingTimeout(callId: string) {
   const timer = ringTimeouts.get(callId);
   if (timer) clearTimeout(timer);
   ringTimeouts.delete(callId);
@@ -28,59 +70,113 @@ export function scheduleRingTimeout(callId: string, onTimeout: () => void) {
     callId,
     setTimeout(() => {
       ringTimeouts.delete(callId);
-      const call = calls.get(callId);
-      if (call?.status === "ringing") onTimeout();
+      void (async () => {
+        const call = await getCall(callId);
+        if (call?.status === "ringing") onTimeout();
+      })();
     }, RING_TIMEOUT_MS),
   );
 }
 
-export function createCall(input: {
+export async function createCall(input: {
   conversationId: string;
   fromUserId: string;
-  toUserId: string;
   fromName: string;
   video: boolean;
+  participantIds: string[];
+  group: boolean;
 }) {
   const callId = randomBytes(12).toString("hex");
-  const roomName = `call_${callId}`;
+  const participantIds = [...new Set(input.participantIds)];
   const record: CallRecord = {
     conversationId: input.conversationId,
     fromUserId: input.fromUserId,
-    toUserId: input.toUserId,
     fromName: input.fromName,
     video: input.video,
-    roomName,
+    roomName: `call_${callId}`,
     status: "ringing",
+    participantIds,
+    ringingIds: participantIds.filter((id) => id !== input.fromUserId),
+    joinedIds: [input.fromUserId],
+    startedAt: null,
+    group: input.group,
   };
-  calls.set(callId, record);
-  return { callId, ...record };
+  await persist(callId, record);
+  return { callId, ...clone(record) };
 }
 
-export function getCall(callId: string) {
-  return calls.get(callId) ?? null;
+export async function getCall(callId: string) {
+  const local = memory.get(callId);
+  if (local) return clone(local);
+  const redis = getRedis();
+  if (!redis) return null;
+  try {
+    const raw = await redis.get(`${CALL_KEY}${callId}`);
+    if (!raw) return null;
+    const record = JSON.parse(raw) as CallRecord;
+    memory.set(callId, record);
+    return clone(record);
+  } catch {
+    return null;
+  }
 }
 
-export function getRingingCallsForCallee(userId: string) {
-  const pending: Array<{ callId: string } & CallRecord> = [];
-  for (const [callId, call] of calls) {
-    if (call.status === "ringing" && call.toUserId === userId) {
-      pending.push({ callId, ...call });
+export async function listCalls() {
+  const redis = getRedis();
+  if (!redis) {
+    return [...memory.entries()].map(([callId, record]) => ({
+      callId,
+      ...clone(record),
+    }));
+  }
+  try {
+    const ids = await redis.smembers(CALL_INDEX);
+    const found: Array<{ callId: string } & CallRecord> = [];
+    for (const callId of ids) {
+      const call = await getCall(callId);
+      if (call) found.push({ callId, ...call });
     }
+    return found;
+  } catch {
+    return [...memory.entries()].map(([callId, record]) => ({
+      callId,
+      ...clone(record),
+    }));
   }
-  return pending;
 }
 
-export function setCallStatus(callId: string, status: CallStatus) {
-  const call = calls.get(callId);
-  if (!call) return null;
-  if (status !== "ringing") clearRingTimeout(callId);
-  call.status = status;
-  if (status === "ended") {
-    calls.delete(callId);
-  }
-  return call;
+export async function getRingingCallsForCallee(userId: string) {
+  const all = await listCalls();
+  return all.filter(
+    (call) => call.status === "ringing" && call.ringingIds.includes(userId),
+  );
 }
 
-export function endCall(callId: string) {
-  return setCallStatus(callId, "ended");
+export async function patchCall(
+  callId: string,
+  patch: Partial<CallRecord>,
+) {
+  const current = await getCall(callId);
+  if (!current) return null;
+  if (patch.status && patch.status !== "ringing") clearRingTimeout(callId);
+  if (patch.status === "ended") {
+    await removeStored(callId);
+    return { ...current, ...patch, status: "ended" as const };
+  }
+  const next = { ...current, ...patch };
+  await persist(callId, next);
+  return clone(next);
+}
+
+export async function endCall(callId: string) {
+  return patchCall(callId, { status: "ended" });
+}
+
+export function isCallMember(call: CallRecord, userId: string) {
+  return call.participantIds.includes(userId);
+}
+
+export function callDurationMs(call: CallRecord) {
+  if (!call.startedAt) return null;
+  return Math.max(0, Date.now() - new Date(call.startedAt).getTime());
 }
