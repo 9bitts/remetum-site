@@ -1,5 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { prisma } from "../prisma.js";
+import {
+  findUserByEmail,
+  isPrismaConnectionError,
+  isPrismaSchemaError,
+  prisma,
+} from "../prisma.js";
 import { hashPassword, verifyPassword } from "../services/password.js";
 import {
   issueAuthTokens,
@@ -167,7 +172,7 @@ export async function authRoutes(app: FastifyInstance) {
         }
 
         const email = normalizeEmail(emailRaw);
-        const user = await prisma.user.findUnique({ where: { email } });
+        const user = await findUserByEmail(email);
         if (!user) {
           return reply.code(401).send({ error: "Credenciais inválidas" });
         }
@@ -177,7 +182,12 @@ export async function authRoutes(app: FastifyInstance) {
           return reply.code(401).send({ error: "Credenciais inválidas" });
         }
 
-        const withHandle = await ensureUserHandle(user);
+        let withHandle = user;
+        try {
+          withHandle = await ensureUserHandle(user);
+        } catch (err) {
+          request.log.error(err);
+        }
         const tokens = await issueAuthTokens(
           withHandle.id,
           withHandle.email,
@@ -188,6 +198,11 @@ export async function authRoutes(app: FastifyInstance) {
         return { user: toAuthUser(withHandle) };
       } catch (err) {
         request.log.error(err);
+        if (isPrismaConnectionError(err) || isPrismaSchemaError(err)) {
+          return reply
+            .code(503)
+            .send({ error: "Banco de dados indisponível. Tente de novo em instantes." });
+        }
         return reply.code(500).send({ error: "Erro interno no login" });
       }
     },

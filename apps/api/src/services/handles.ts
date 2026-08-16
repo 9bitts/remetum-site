@@ -23,12 +23,17 @@ export async function ensureUserHandle<T extends { id: string; name: string; han
   user: T,
 ): Promise<T & { handle: string }> {
   if (user.handle) return user as T & { handle: string };
-  const handle = await allocateHandle(user.name, user.id);
-  const updated = await prisma.user.update({
-    where: { id: user.id },
-    data: { handle },
-  });
-  return { ...user, handle: updated.handle! };
+  try {
+    const handle = await allocateHandle(user.name, user.id);
+    const updated = await prisma.user.update({
+      where: { id: user.id },
+      data: { handle },
+    });
+    return { ...user, handle: updated.handle! };
+  } catch (err) {
+    console.error("[handles] ensureUserHandle failed", err);
+    return { ...user, handle: user.handle ?? `u${user.id.slice(-8)}` };
+  }
 }
 
 export function assertHandle(raw: string) {

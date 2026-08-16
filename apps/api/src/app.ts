@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type {
   IncomingMessage,
   Server as HttpServer,
@@ -20,8 +22,12 @@ import { mediaRoutes } from "./routes/media.js";
 import { pushRoutes } from "./routes/push.js";
 import { statusRoutes } from "./routes/status.js";
 import { config } from "./config.js";
+import { ensureLoginSchema } from "./prisma.js";
 
 type RequestListener = (req: IncomingMessage, res: ServerResponse) => void;
+
+const apiRoot = fileURLToPath(new URL("..", import.meta.url));
+const schemaPath = path.join(apiRoot, "prisma", "schema.prisma");
 
 function syncSchemaInBackground(log: {
   info: (o: unknown, msg?: string) => void;
@@ -29,9 +35,9 @@ function syncSchemaInBackground(log: {
 }) {
   const child = spawn(
     process.platform === "win32" ? "npx.cmd" : "npx",
-    ["prisma", "db", "push", "--skip-generate"],
+    ["prisma", "db", "push", "--skip-generate", "--schema", schemaPath],
     {
-      cwd: process.cwd(),
+      cwd: apiRoot,
       env: { ...process.env, CI: "true" },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -109,6 +115,13 @@ export async function attachApp(
     timeWindow: "1 minute",
   });
   await app.register(authPlugin);
+
+  try {
+    await ensureLoginSchema();
+    app.log.info("login schema ready");
+  } catch (err) {
+    app.log.error({ err }, "failed to prepare login schema");
+  }
 
   await app.register(healthRoutes);
   await app.register(authRoutes);

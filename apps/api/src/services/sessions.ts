@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { prisma } from "../prisma.js";
+import { isPrismaSchemaError, prisma } from "../prisma.js";
 import { config } from "../config.js";
 import {
   signAccessToken,
@@ -12,10 +12,9 @@ function hashToken(token: string) {
 }
 
 function isMissingSessionTable(err: unknown) {
-  const e = err as { code?: string; message?: string };
+  const e = err as { message?: string };
   return (
-    e.code === "P2021" ||
-    e.code === "P2010" ||
+    isPrismaSchemaError(err) ||
     /refresh_sessions|does not exist|no such table/i.test(e.message ?? "")
   );
 }

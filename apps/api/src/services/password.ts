@@ -18,6 +18,11 @@ export async function verifyPassword(
   passwordHash: string,
   password: string,
 ): Promise<boolean> {
-  const { verify } = await argon2();
-  return verify(passwordHash, password);
+  try {
+    const { verify } = await argon2();
+    return await verify(passwordHash, password);
+  } catch (err) {
+    console.error("[auth] password verify failed", err);
+    return false;
+  }
 }
