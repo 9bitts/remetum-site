@@ -1,126 +1,50 @@
-import { spawn } from "node:child_process";
-import Fastify from "fastify";
-import cors from "@fastify/cors";
-import cookie from "@fastify/cookie";
-import rateLimit from "@fastify/rate-limit";
-import authPlugin from "./plugins/auth.js";
-import { healthRoutes } from "./routes/health.js";
-import { authRoutes } from "./routes/auth.js";
-import { conversationRoutes } from "./routes/conversations.js";
-import { messageRoutes } from "./routes/messages.js";
-import { callRoutes } from "./routes/calls.js";
-import { userRoutes } from "./routes/users.js";
-import { uploadRoutes } from "./routes/uploads.js";
-import { mediaRoutes } from "./routes/media.js";
-import { pushRoutes } from "./routes/push.js";
-import { statusRoutes } from "./routes/status.js";
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import { config } from "./config.js";
 
-function syncSchemaInBackground(log: {
-  info: (o: unknown, msg?: string) => void;
-  error: (o: unknown, msg?: string) => void;
-}) {
-  const child = spawn(
-    process.platform === "win32" ? "npx.cmd" : "npx",
-    ["prisma", "db", "push", "--skip-generate"],
-    {
-      cwd: process.cwd(),
-      env: { ...process.env, CI: "true" },
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
+function sendJson(res: ServerResponse, status: number, body: unknown) {
+  res.writeHead(status, {
+    "content-type": "application/json",
+    "cache-control": "no-store",
+  });
+  res.end(JSON.stringify(body));
+}
 
-  let stderr = "";
-  child.stderr?.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString();
-  });
-  child.stdout?.on("data", (chunk: Buffer) => {
-    const line = chunk.toString().trim();
-    if (line) log.info({ prisma: line }, "db push");
-  });
-  child.on("error", (err) => {
-    log.error({ err }, "failed to start prisma db push");
-  });
-  child.on("exit", (code) => {
-    if (code === 0) {
-      log.info("database schema synced");
-      return;
-    }
-    log.error({ code, stderr: stderr.slice(-2000) }, "prisma db push exited");
-  });
-
-  const timer = setTimeout(() => {
-    if (child.exitCode !== null) return;
-    log.error("prisma db push timed out; killing so the API stays up");
-    child.kill("SIGKILL");
-  }, 45_000);
-  child.on("exit", () => clearTimeout(timer));
+function bootHandler(req: IncomingMessage, res: ServerResponse) {
+  const path = (req.url ?? "").split("?")[0];
+  if (path === "/health" || path === "/health/") {
+    sendJson(res, 200, {
+      ok: true,
+      service: "remetum-api",
+      timestamp: new Date().toISOString(),
+    });
+    return;
+  }
+  sendJson(res, 503, { error: "API a iniciar" });
 }
 
 async function main() {
-  const app = Fastify({
-    logger: true,
-    bodyLimit: config.upload.maxBytes,
+  const server = createServer(bootHandler);
+
+  await new Promise<void>((resolve, reject) => {
+    const onError = (err: Error) => reject(err);
+    server.once("error", onError);
+    server.listen(config.port, "0.0.0.0", () => {
+      server.off("error", onError);
+      resolve();
+    });
   });
-
-  await app.register(cors, {
-    origin: (origin, cb) => {
-      if (!origin) {
-        cb(null, true);
-        return;
-      }
-      if (config.corsOrigins.includes(origin)) {
-        cb(null, origin);
-        return;
-      }
-      cb(null, false);
-    },
-    credentials: true,
-    methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "X-Requested-With",
-      "Accept",
-    ],
-    maxAge: 86400,
-  });
-
-  await app.register(cookie);
-  await app.register(rateLimit, {
-    global: true,
-    max: 300,
-    timeWindow: "1 minute",
-  });
-  await app.register(authPlugin);
-
-  await app.register(healthRoutes);
-  await app.register(authRoutes);
-  await app.register(conversationRoutes);
-  await app.register(messageRoutes);
-  await app.register(callRoutes);
-  await app.register(userRoutes);
-  await app.register(mediaRoutes);
-  await app.register(uploadRoutes);
-  await app.register(pushRoutes);
-  await app.register(statusRoutes);
-
-  await app.listen({ port: config.port, host: "0.0.0.0" });
-  app.log.info(`Remetum API listening on :${config.port}`);
+  console.log(`Remetum API listening on :${config.port}`);
 
   try {
-    const { createSocketServer } = await import("./sockets/index.js");
-    await Promise.race([
-      createSocketServer(app.server, config.corsOrigins),
-      new Promise<void>((_, reject) => {
-        setTimeout(() => reject(new Error("socket setup timed out")), 8_000);
-      }),
-    ]);
+    const { attachApp } = await import("./app.js");
+    await attachApp(server, bootHandler);
   } catch (err) {
-    app.log.error({ err }, "socket server failed to start; HTTP still up");
+    console.error("[boot] failed to load API routes; /health still up", err);
   }
-
-  syncSchemaInBackground(app.log);
 }
 
 process.on("unhandledRejection", (reason) => {

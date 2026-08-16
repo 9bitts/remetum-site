@@ -29,26 +29,37 @@ const AUTH_SKIP_REFRESH = new Set([
 
 let refreshInFlight: Promise<boolean> | null = null;
 
+function withTimeout(signal: AbortSignal | undefined, ms: number) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  const onAbort = () => controller.abort();
+  signal?.addEventListener("abort", onAbort);
+  if (signal?.aborted) controller.abort();
+  return {
+    signal: controller.signal,
+    clear() {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    },
+  };
+}
+
 export async function refreshSession(signal?: AbortSignal): Promise<boolean> {
   if (refreshInFlight) return refreshInFlight;
   refreshInFlight = (async () => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8_000);
-    const onAbort = () => controller.abort();
-    signal?.addEventListener("abort", onAbort);
+    const timeout = withTimeout(signal, 8_000);
     try {
       const res = await fetch(`${API_URL}/auth/refresh`, {
         method: "POST",
         credentials: "include",
-        signal: controller.signal,
+        signal: timeout.signal,
       });
       if (res.ok) connectSocket();
       return res.ok;
     } catch {
       return false;
     } finally {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
+      timeout.clear();
       refreshInFlight = null;
     }
   })();
@@ -60,12 +71,25 @@ export async function fetchWithAuth(
   init: RequestInit = {},
   retryOn401 = true,
 ): Promise<Response> {
-  const res = await fetch(input, { ...init, credentials: "include" });
-  if (res.status !== 401 || !retryOn401) return res;
-  if (init.signal?.aborted) return res;
-  const ok = await refreshSession(init.signal ?? undefined);
-  if (!ok) return res;
-  return fetch(input, { ...init, credentials: "include" });
+  const timeout = withTimeout(init.signal ?? undefined, 12_000);
+  try {
+    const res = await fetch(input, {
+      ...init,
+      credentials: "include",
+      signal: timeout.signal,
+    });
+    if (res.status !== 401 || !retryOn401) return res;
+    if (timeout.signal.aborted) return res;
+    const ok = await refreshSession(timeout.signal);
+    if (!ok) return res;
+    return fetch(input, {
+      ...init,
+      credentials: "include",
+      signal: timeout.signal,
+    });
+  } finally {
+    timeout.clear();
+  }
 }
 
 export async function api<T>(path: string, options: ApiOptions = {}): Promise<T> {

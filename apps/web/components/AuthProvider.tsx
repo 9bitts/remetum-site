@@ -77,6 +77,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   useEffect(() => {
+    if (!loading) return;
+    const timer = window.setTimeout(() => {
+      setLoading(false);
+      setSessionError(
+        (prev) => prev ?? "A API não respondeu. Tente de novo em instantes.",
+      );
+    }, 15_000);
+    return () => window.clearTimeout(timer);
+  }, [loading]);
+
+  useEffect(() => {
     const onPageShow = (event: PageTransitionEvent) => {
       if (event.persisted) void refresh();
     };
