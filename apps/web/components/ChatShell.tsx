@@ -43,6 +43,14 @@ import {
   type OutboxItem,
 } from "@/lib/outbox";
 import { groupInviteUrl } from "@/lib/links";
+import { uploadMedia } from "@/lib/upload";
+import {
+  consumeIncomingShare,
+  discardIncomingShare,
+  incomingShareLabel,
+  subscribeIncomingShare,
+  type IncomingShare,
+} from "@/lib/incoming-share";
 
 function outboxToMessage(item: OutboxItem, userId: string): Message {
   return {
@@ -95,6 +103,8 @@ export function ChatShell() {
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editing, setEditing] = useState<Message | null>(null);
   const [forwarding, setForwarding] = useState<Message | null>(null);
+  const [incomingShare, setIncomingShare] = useState<IncomingShare | null>(null);
+  const [incomingBusy, setIncomingBusy] = useState(false);
   const [callState, setCallState] = useState<CallUiState | null>(null);
   const [callMedia, setCallMedia] = useState<CallMedia | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
@@ -131,6 +141,11 @@ export function ChatShell() {
   useStayInAppBack(Boolean(user) && !loading, () => {
     if (forwarding) {
       setForwarding(null);
+      return true;
+    }
+    if (incomingShare) {
+      setIncomingShare(null);
+      void discardIncomingShare();
       return true;
     }
     if (groupInfoOpen) {
@@ -297,6 +312,48 @@ export function ChatShell() {
       });
     void registerPush().catch(() => undefined);
   }, [user, refreshConversations, refresh, selectConversation]);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    void consumeIncomingShare()
+      .then((share) => {
+        if (!cancelled && share) setIncomingShare(share);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          window.alert(
+            err instanceof Error ? err.message : "Falha ao receber arquivo",
+          );
+        }
+      });
+    const unsub = subscribeIncomingShare(
+      (share) => {
+        if (!cancelled) setIncomingShare(share);
+      },
+      (message) => {
+        if (!cancelled) window.alert(message);
+      },
+    );
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has("share-target")) {
+        url.searchParams.delete("share-target");
+        const search = url.searchParams.toString();
+        window.history.replaceState(
+          {},
+          "",
+          `${url.pathname}${search ? `?${search}` : ""}`,
+        );
+      }
+    } catch {
+      // ignore
+    }
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, [user]);
 
   useEffect(() => {
     const q = search.trim();
@@ -681,6 +738,59 @@ export function ChatShell() {
       replyToId: input.replyToId,
       clientTempId,
     });
+  }
+
+  function sendToConversation(
+    conversationId: string,
+    input: {
+      content?: string;
+      type: "text" | "image" | "file" | "audio" | "video";
+      mediaUrl?: string;
+    },
+  ) {
+    if (!user) return;
+    const clientTempId = tempId();
+    enqueueOutbox({
+      clientTempId,
+      conversationId,
+      content: input.content,
+      type: input.type,
+      mediaUrl: input.mediaUrl,
+      createdAt: new Date().toISOString(),
+    });
+    getSocket().emit(SOCKET_EVENTS.MESSAGE_SEND, {
+      conversationId,
+      content: input.content,
+      type: input.type,
+      mediaUrl: input.mediaUrl,
+      clientTempId,
+    });
+  }
+
+  async function deliverIncoming(conversationId: string) {
+    if (!incomingShare || incomingBusy) return;
+    setIncomingBusy(true);
+    try {
+      if (incomingShare.kind === "text") {
+        sendToConversation(conversationId, {
+          type: "text",
+          content: incomingShare.text,
+        });
+      } else {
+        const data = await uploadMedia(incomingShare.file);
+        sendToConversation(conversationId, {
+          type: data.type,
+          mediaUrl: data.url,
+          content: incomingShare.file.name,
+        });
+      }
+      setIncomingShare(null);
+      await selectConversation(conversationId);
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Falha ao enviar");
+    } finally {
+      setIncomingBusy(false);
+    }
   }
 
   async function patchPrefs(patch: {
@@ -1127,6 +1237,10 @@ export function ChatShell() {
             if (prev.some((c) => c.id === conversation.id)) return prev;
             return [conversation, ...prev];
           });
+          if (incomingShare) {
+            void deliverIncoming(conversation.id);
+            return;
+          }
           void selectConversation(conversation.id);
         }}
       />
@@ -1189,6 +1303,61 @@ export function ChatShell() {
                   </button>
                 ))}
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {incomingShare ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center">
+          <div className="max-h-[80dvh] w-full max-w-md overflow-y-auto rounded-[var(--radius-ebano)] bg-ebano-surface p-4 shadow-xl">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold">Enviar no Remetum</h2>
+              <button
+                type="button"
+                disabled={incomingBusy}
+                onClick={() => {
+                  setIncomingShare(null);
+                  void discardIncomingShare();
+                }}
+                className="text-ebano-muted hover:text-ebano-text disabled:opacity-50"
+              >
+                Fechar
+              </button>
+            </div>
+            <p className="mb-3 truncate text-sm text-ebano-muted">
+              {incomingBusy ? "Enviando…" : incomingShareLabel(incomingShare)}
+            </p>
+            <div className="space-y-1">
+              {conversations.filter((c) => !c.archivedAt).length === 0 ? (
+                <p className="px-3 py-2 text-sm text-ebano-muted">
+                  Nenhuma conversa ainda. Inicie um chat para enviar.
+                </p>
+              ) : (
+                conversations
+                  .filter((c) => !c.archivedAt)
+                  .map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      disabled={incomingBusy}
+                      onClick={() => void deliverIncoming(c.id)}
+                      className="flex w-full items-center rounded-xl px-3 py-2.5 text-left hover:bg-white/5 disabled:opacity-50"
+                    >
+                      <span className="truncate text-sm">
+                        {conversationTitle(c, user.id)}
+                      </span>
+                    </button>
+                  ))
+              )}
+            </div>
+            <button
+              type="button"
+              disabled={incomingBusy}
+              onClick={() => setNewChatOpen(true)}
+              className="mt-3 w-full rounded-xl border border-ebano-accent/70 px-3 py-2.5 text-sm font-medium text-ebano-accent hover:bg-ebano-accent hover:text-ebano-bg disabled:opacity-50"
+            >
+              Nova conversa
+            </button>
           </div>
         </div>
       ) : null}

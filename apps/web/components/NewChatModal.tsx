@@ -92,7 +92,7 @@ export function NewChatModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center">
+    <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/60 p-4 sm:items-center">
       <div className="w-full max-w-md rounded-[var(--radius-ebano)] bg-ebano-surface p-4 shadow-xl">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold">Nova conversa</h2>

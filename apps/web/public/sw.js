@@ -124,3 +124,50 @@ self.addEventListener("notificationclick", (event) => {
     }),
   );
 });
+
+const SHARE_CACHE = "remetum-share-target-v1";
+const SHARE_FILE = "/__share-target/file";
+const SHARE_TEXT = "/__share-target/text";
+
+async function handleShareTarget(request) {
+  const formData = await request.formData();
+  const cache = await caches.open(SHARE_CACHE);
+  await cache.delete(SHARE_FILE);
+  await cache.delete(SHARE_TEXT);
+
+  const files = formData
+    .getAll("media")
+    .filter((value) => value instanceof File && value.size > 0);
+  const file = files[0];
+  const text = ["title", "text", "url"]
+    .map((key) => formData.get(key))
+    .filter((value) => typeof value === "string" && value.trim())
+    .join("\n");
+
+  if (file) {
+    await cache.put(
+      SHARE_FILE,
+      new Response(file, {
+        headers: {
+          "Content-Type": file.type || "application/octet-stream",
+          "X-Filename": encodeURIComponent(file.name || "arquivo"),
+        },
+      }),
+    );
+  } else if (text) {
+    await cache.put(
+      SHARE_TEXT,
+      new Response(text, {
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+      }),
+    );
+  }
+
+  return Response.redirect(new URL("/app?share-target=1", self.location.origin).href, 303);
+}
+
+self.addEventListener("fetch", (event) => {
+  const url = new URL(event.request.url);
+  if (event.request.method !== "POST" || url.pathname !== "/share-target") return;
+  event.respondWith(handleShareTarget(event.request));
+});
