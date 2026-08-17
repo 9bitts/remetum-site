@@ -42,6 +42,34 @@ function encodePng(width, height, rgba) {
   return Buffer.concat([
     Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
     chunk("IHDR", ihdr),
+    chunk("sRGB", Buffer.from([0])),
+    chunk("IDAT", deflateSync(raw, { level: 9 })),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+function encodePngRgb(width, height, rgba) {
+  const raw = Buffer.alloc((width * 3 + 1) * height);
+  for (let y = 0; y < height; y += 1) {
+    const rowStart = y * (width * 3 + 1);
+    raw[rowStart] = 0;
+    for (let x = 0; x < width; x += 1) {
+      const i = (y * width + x) * 4;
+      const o = rowStart + 1 + x * 3;
+      raw[o] = rgba[i];
+      raw[o + 1] = rgba[i + 1];
+      raw[o + 2] = rgba[i + 2];
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunk("IHDR", ihdr),
+    chunk("sRGB", Buffer.from([0])),
     chunk("IDAT", deflateSync(raw, { level: 9 })),
     chunk("IEND", Buffer.alloc(0)),
   ]);
@@ -98,7 +126,7 @@ function drawR(rgba, size) {
   }
 }
 
-function iconPng(size, { round = false } = {}) {
+function iconPng(size, { round = false, rgb = false } = {}) {
   const rgba = Buffer.alloc(size * size * 4);
   const r = round ? size * 0.22 : 0;
   for (let y = 0; y < size; y += 1) {
@@ -118,7 +146,7 @@ function iconPng(size, { round = false } = {}) {
     }
   }
   drawR(rgba, size);
-  return encodePng(size, size, rgba);
+  return rgb ? encodePngRgb(size, size, rgba) : encodePng(size, size, rgba);
 }
 
 function featureGraphic() {
@@ -149,7 +177,7 @@ function featureGraphic() {
   }
   writeWord(rgba, w, 360, 188, "REMETUM", GOLD, 7);
   writeWord(rgba, w, 360, 280, "CONVERSAS COM ESTILO", CREAM, 3);
-  return encodePng(w, h, rgba);
+  return encodePngRgb(w, h, rgba);
 }
 
 const GLYPHS = {
@@ -239,8 +267,10 @@ async function main() {
   const icon192 = iconPng(192, { round: true });
   await write(path.join(ROOT, "assets", "icon.png"), icon1024);
   await write(path.join(ROOT, "assets", "splash.png"), splashPng(1280));
-  await write(path.join(ROOT, "store", "icon-512.png"), icon512);
+  await write(path.join(ROOT, "store", "icon-512.png"), iconPng(512));
+  await write(path.join(ROOT, "store", "play-icon-512.png"), iconPng(512));
   await write(path.join(ROOT, "store", "feature-graphic.png"), featureGraphic());
+  await write(path.join(ROOT, "store", "play-feature-graphic.png"), featureGraphic());
   await write(path.join(ROOT, "apps", "web", "public", "icons", "icon-512.png"), icon512);
   await write(path.join(ROOT, "apps", "web", "public", "icons", "icon-192.png"), icon192);
   await write(
