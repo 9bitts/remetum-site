@@ -37,8 +37,16 @@ export function Composer({
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const capture = useRef(new VoiceCapture());
+  const onFileRef = useRef<(file: File) => Promise<void>>(async () => undefined);
+  const pasteGuard = useRef({
+    disabled: Boolean(disabled),
+    uploading: false,
+    editing: false,
+    recording: false,
+  });
 
   useEffect(() => {
     if (editing) setText(editing.content ?? "");
@@ -85,6 +93,44 @@ export function Composer({
     });
   }, [editing, replyTo, onCancelEdit, onCancelReply]);
 
+  useEffect(() => {
+    function handlePaste(event: ClipboardEvent) {
+      const guard = pasteGuard.current;
+      if (guard.disabled || guard.uploading || guard.editing || guard.recording) return;
+
+      const target = event.target;
+      if (target instanceof HTMLElement) {
+        const tag = target.tagName;
+        if (tag === "INPUT" || tag === "SELECT" || target.isContentEditable) return;
+        if (tag === "TEXTAREA" && target !== textareaRef.current) return;
+      }
+      const overlayOpen = Array.from(document.querySelectorAll(".fixed.inset-0")).some(
+        (el) => !el.contains(textareaRef.current),
+      );
+      if (overlayOpen) return;
+
+      const images = filesFromClipboard(event.clipboardData);
+      if (images.length === 0) return;
+
+      event.preventDefault();
+      void (async () => {
+        for (const file of images) {
+          await onFileRef.current(file);
+        }
+      })();
+    }
+
+    document.addEventListener("paste", handlePaste);
+    return () => document.removeEventListener("paste", handlePaste);
+  }, []);
+
+  pasteGuard.current = {
+    disabled: Boolean(disabled),
+    uploading,
+    editing: Boolean(editing),
+    recording,
+  };
+
   function handleChange(value: string) {
     setText(value);
     onTyping(true);
@@ -130,6 +176,7 @@ export function Composer({
       if (fileRef.current) fileRef.current.value = "";
     }
   }
+  onFileRef.current = onFile;
 
   function armMic() {
     if (recording || uploading || disabled) return;
@@ -236,6 +283,7 @@ export function Composer({
           <PaperclipIcon />
         </button>
         <textarea
+          ref={textareaRef}
           rows={1}
           value={text}
           disabled={disabled || uploading}
@@ -247,6 +295,7 @@ export function Composer({
             }
           }}
           placeholder={editing ? "Editar mensagem" : "Mensagem"}
+          title="Cole uma imagem com Ctrl+V"
           className="max-h-32 min-h-[42px] flex-1 resize-none rounded-xl border border-white/10 bg-ebano-surface px-3 py-2.5 text-[15px] outline-none focus:border-ebano-accent"
         />
         {!editing ? (
@@ -276,6 +325,39 @@ export function Composer({
       </form>
     </div>
   );
+}
+
+function namedClipboardImage(file: File): File {
+  const genericName = !file.name || /^(image|blob|untitled)\.(png|jpe?g|gif|webp|bmp)$/i.test(file.name);
+  if (!genericName) return file;
+  const mime = file.type || "image/png";
+  const ext =
+    mime === "image/jpeg" ? "jpg" : mime === "image/webp" ? "webp" : mime === "image/gif" ? "gif" : "png";
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const name = `captura-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.${ext}`;
+  return new File([file], name, { type: mime, lastModified: file.lastModified });
+}
+
+function filesFromClipboard(data: DataTransfer | null): File[] {
+  if (!data) return [];
+  const files: File[] = [];
+  const seen = new Set<File>();
+
+  for (const item of Array.from(data.items ?? [])) {
+    if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
+    const file = item.getAsFile();
+    if (!file || seen.has(file)) continue;
+    seen.add(file);
+    files.push(namedClipboardImage(file));
+  }
+
+  if (files.length > 0) return files;
+
+  for (const file of Array.from(data.files ?? [])) {
+    if (file.type.startsWith("image/")) files.push(namedClipboardImage(file));
+  }
+  return files;
 }
 
 function PaperclipIcon() {
