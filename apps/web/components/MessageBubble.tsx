@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { Message } from "@ebano/shared";
 import { formatCallMessage, parseCallMessage } from "@ebano/shared";
 import { formatTime } from "@/lib/format";
-import { splitMessageLinks } from "@/lib/links";
+import { splitMessageLinks, hrefForLink } from "@/lib/links";
 import { fileLooksLikePdf, mediaSrc, openMediaFile } from "@/lib/media";
 import { MediaLightbox } from "./MediaLightbox";
 
@@ -145,10 +145,19 @@ export function MessageBubble({
                 part.type === "url" ? (
                   <a
                     key={`${part.value}-${i}`}
-                    href={part.value}
+                    href={hrefForLink(part.value)}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="break-all text-ebano-accent underline underline-offset-2"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      window.open(
+                        hrefForLink(part.value),
+                        "_blank",
+                        "noopener,noreferrer",
+                      );
+                    }}
+                    className="inline break-all text-ebano-accent underline decoration-ebano-accent/80 underline-offset-2"
                   >
                     {part.value}
                   </a>
