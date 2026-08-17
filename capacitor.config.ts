@@ -9,7 +9,12 @@ const config: CapacitorConfig = {
     url: "https://remetum.com",
     cleartext: false,
     androidScheme: "https",
-    allowNavigation: ["remetum.com", "www.remetum.com", "*.remetum.com"],
+    allowNavigation: [
+      "remetum.com",
+      "www.remetum.com",
+      "*.remetum.com",
+      "*.livekit.cloud",
+    ],
   },
   android: {
     backgroundColor: "#0B0B0D",

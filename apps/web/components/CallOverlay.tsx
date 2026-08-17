@@ -2,15 +2,21 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  ConnectionState,
   Room,
   RoomEvent,
   Track,
+  type LocalTrack,
+  type RemoteParticipant,
   type RemoteTrack,
   type RemoteTrackPublication,
-  type RemoteParticipant,
 } from "livekit-client";
 import type { CallAcceptedEvent, CallOfferEvent } from "@ebano/shared";
 import { createRingtone } from "@/lib/ringtone";
+import {
+  getCallAudioContext,
+  type CallMedia,
+} from "@/lib/call-media";
 
 export type CallUiState =
   | {
@@ -19,6 +25,9 @@ export type CallUiState =
       callId: string | null;
       video: boolean;
       peerName: string;
+      token: string | null;
+      livekitUrl: string | null;
+      roomName: string | null;
     }
   | {
       phase: "incoming";
@@ -36,15 +45,55 @@ export type CallUiState =
 
 type CameraFacing = "user" | "environment";
 
-function attachLocalCamera(room: Room, el: HTMLVideoElement | null) {
-  const localVideo = room.localParticipant.getTrackPublication(
-    Track.Source.Camera,
-  )?.videoTrack;
-  if (localVideo && el) localVideo.attach(el);
+type RoomConnection = {
+  callId: string;
+  token: string;
+  url: string;
+  video: boolean;
+};
+
+function connectionOf(state: CallUiState | null): RoomConnection | null {
+  if (!state) return null;
+  if (state.phase === "outgoing" && state.token && state.livekitUrl && state.callId) {
+    return {
+      callId: state.callId,
+      token: state.token,
+      url: state.livekitUrl,
+      video: state.video,
+    };
+  }
+  if (state.phase === "active") {
+    return {
+      callId: state.accepted.callId,
+      token: state.accepted.token,
+      url: state.accepted.livekitUrl,
+      video: state.accepted.video,
+    };
+  }
+  return null;
+}
+
+function attachMediaElement(
+  track: RemoteTrack | LocalTrack,
+  parent: HTMLElement | null,
+  className: string,
+  muted = false,
+) {
+  const el = track.attach();
+  el.autoplay = true;
+  el.muted = muted;
+  el.className = className;
+  el.setAttribute("playsinline", "true");
+  if (el instanceof HTMLVideoElement) el.playsInline = true;
+  if (el instanceof HTMLAudioElement) el.volume = 1;
+  parent?.appendChild(el);
+  void el.play().catch(() => undefined);
+  return el;
 }
 
 export function CallOverlay({
   state,
+  localMedia,
   onAccept,
   onReject,
   onCancel,
@@ -52,6 +101,7 @@ export function CallOverlay({
   onDismissError,
 }: {
   state: CallUiState | null;
+  localMedia: CallMedia | null;
   onAccept: () => void;
   onReject: () => void;
   onCancel: () => void;
@@ -62,89 +112,161 @@ export function CallOverlay({
   const [facing, setFacing] = useState<CameraFacing>("user");
   const [flipping, setFlipping] = useState(false);
   const [flipError, setFlipError] = useState<string | null>(null);
-  const [remotes, setRemotes] = useState<Array<{ id: string; name: string }>>(
-    [],
+  const [micMuted, setMicMuted] = useState(false);
+  const [camOff, setCamOff] = useState(false);
+  const [roomState, setRoomState] = useState<ConnectionState>(
+    ConnectionState.Disconnected,
   );
+  const [remoteCount, setRemoteCount] = useState(0);
+  const localMediaRef = useRef(localMedia);
+  localMediaRef.current = localMedia;
   const roomRef = useRef<Room | null>(null);
+  const remoteStageRef = useRef<HTMLDivElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement>(null);
-  const remoteVideos = useRef<Map<string, HTMLVideoElement>>(new Map());
-  const remoteAudioRef = useRef<HTMLAudioElement>(null);
+  const connection = connectionOf(state);
 
   useEffect(() => {
-    if (!state || state.phase !== "active") {
+    if (!localMedia?.video || !localVideoRef.current) return;
+    localMedia.video.attach(localVideoRef.current);
+    return () => {
+      if (localVideoRef.current) localMedia.video?.detach(localVideoRef.current);
+    };
+  }, [localMedia, state?.phase]);
+
+  useEffect(() => {
+    if (!connection) {
       setConnectError(null);
       setFacing("user");
       setFlipError(null);
+      setMicMuted(false);
+      setCamOff(false);
+      setRoomState(ConnectionState.Disconnected);
+      setRemoteCount(0);
       return;
     }
 
     let cancelled = false;
+    const audioContext = getCallAudioContext();
     const room = new Room({
       adaptiveStream: true,
       dynacast: true,
+      webAudioMix: audioContext ? { audioContext } : true,
+      audioCaptureDefaults: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
       videoCaptureDefaults: {
         facingMode: "user",
       },
     });
     roomRef.current = room;
-    setRemotes([]);
 
     function syncRemotes() {
-      const next = [...room.remoteParticipants.values()].map((p) => ({
-        id: p.identity,
-        name: p.name || p.identity,
-      }));
-      setRemotes(next);
+      setRemoteCount(room.remoteParticipants.size);
     }
 
     function attachRemote(
       track: RemoteTrack,
       _publication: RemoteTrackPublication,
-      participant: RemoteParticipant,
+      _participant: RemoteParticipant,
     ) {
-      if (track.kind === Track.Kind.Video) {
-        const el =
-          remoteVideos.current.get(participant.identity) ??
-          remoteVideoRef.current;
-        if (el) track.attach(el);
-      }
-      if (track.kind === Track.Kind.Audio && remoteAudioRef.current) {
-        track.attach(remoteAudioRef.current);
+      const isVideo = track.kind === Track.Kind.Video;
+      attachMediaElement(
+        track,
+        remoteStageRef.current,
+        isVideo
+          ? "h-full w-full min-h-0 object-cover"
+          : "pointer-events-none absolute h-px w-px opacity-0",
+        false,
+      );
+      syncRemotes();
+    }
+
+    function detachRemote(track: RemoteTrack) {
+      for (const el of track.detach()) {
+        el.remove();
       }
       syncRemotes();
     }
 
     room.on(RoomEvent.TrackSubscribed, attachRemote);
+    room.on(RoomEvent.TrackUnsubscribed, detachRemote);
     room.on(RoomEvent.ParticipantConnected, syncRemotes);
     room.on(RoomEvent.ParticipantDisconnected, syncRemotes);
+    room.on(RoomEvent.ConnectionStateChanged, (next) => {
+      if (!cancelled) setRoomState(next);
+    });
+    room.on(RoomEvent.Disconnected, () => {
+      if (!cancelled) {
+        setRoomState(ConnectionState.Disconnected);
+      }
+    });
+    room.on(RoomEvent.MediaDevicesError, (err) => {
+      if (!cancelled) {
+        setConnectError(
+          err instanceof Error ? err.message : "Falha nos dispositivos de mídia",
+        );
+      }
+    });
 
     void (async () => {
       try {
-        await room.connect(state.accepted.livekitUrl, state.accepted.token);
+        await room.prepareConnection(connection.url, connection.token);
+        if (cancelled) return;
+        await room.connect(connection.url, connection.token);
         if (cancelled) {
-          await room.disconnect();
+          await room.disconnect(false);
           return;
         }
-        await room.localParticipant.setMicrophoneEnabled(true);
-        if (state.accepted.video) {
-          await room.localParticipant.setCameraEnabled(true, {
-            facingMode: "user",
-          });
-        }
-        attachLocalCamera(room, localVideoRef.current);
-        syncRemotes();
-        for (const participant of room.remoteParticipants.values()) {
-          for (const pub of participant.trackPublications.values()) {
-            if (pub.track) {
-              attachRemote(
-                pub.track as RemoteTrack,
-                pub as RemoteTrackPublication,
-                participant,
+
+        const media = localMediaRef.current;
+        const hasMic = room.localParticipant.getTrackPublication(
+          Track.Source.Microphone,
+        );
+        if (media?.audio) {
+          if (!hasMic) await room.localParticipant.publishTrack(media.audio);
+        } else {
+          try {
+            await room.localParticipant.setMicrophoneEnabled(true);
+          } catch (err) {
+            if (!cancelled) {
+              setConnectError(
+                err instanceof Error
+                  ? err.message
+                  : "Não foi possível ligar o microfone",
               );
+            }
+            return;
+          }
+        }
+
+        if (connection.video) {
+          const hasCam = room.localParticipant.getTrackPublication(
+            Track.Source.Camera,
+          );
+          if (media?.video) {
+            if (!hasCam) await room.localParticipant.publishTrack(media.video);
+            if (localVideoRef.current) media.video.attach(localVideoRef.current);
+          } else if (!hasCam) {
+            try {
+              await room.localParticipant.setCameraEnabled(true, {
+                facingMode: "user",
+              });
+              const localVideo = room.localParticipant.getTrackPublication(
+                Track.Source.Camera,
+              )?.videoTrack;
+              if (localVideo && localVideoRef.current) {
+                localVideo.attach(localVideoRef.current);
+              }
+            } catch {
+              // continue without camera
             }
           }
         }
+
+        syncRemotes();
+        // Existing remote tracks arrive via TrackSubscribed after connect.
       } catch (err) {
         if (!cancelled) {
           setConnectError(
@@ -157,27 +279,36 @@ export function CallOverlay({
     return () => {
       cancelled = true;
       room.off(RoomEvent.TrackSubscribed, attachRemote);
+      room.off(RoomEvent.TrackUnsubscribed, detachRemote);
       room.off(RoomEvent.ParticipantConnected, syncRemotes);
       room.off(RoomEvent.ParticipantDisconnected, syncRemotes);
-      void room.disconnect();
-      roomRef.current = null;
+      void room.disconnect(false);
+      if (roomRef.current === room) roomRef.current = null;
     };
-  }, [state]);
+  }, [connection?.callId, connection?.token, connection?.url]);
 
   useEffect(() => {
-    const room = roomRef.current;
-    if (!room) return;
-    for (const participant of room.remoteParticipants.values()) {
-      for (const pub of participant.trackPublications.values()) {
-        if (pub.track?.kind === Track.Kind.Video) {
-          const el =
-            remoteVideos.current.get(participant.identity) ??
-            remoteVideoRef.current;
-          if (el) pub.track.attach(el);
-        }
-      }
+    if (!state || (state.phase !== "outgoing" && state.phase !== "active")) {
+      return;
     }
-  }, [remotes]);
+    let wake: WakeLockSentinel | null = null;
+    const request = async () => {
+      try {
+        wake = await navigator.wakeLock?.request("screen");
+      } catch {
+        // unsupported
+      }
+    };
+    void request();
+    const onVis = () => {
+      if (document.visibilityState === "visible") void request();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      void wake?.release();
+    };
+  }, [state?.phase]);
 
   const incomingCallId =
     state?.phase === "incoming" ? state.offer.callId : null;
@@ -204,45 +335,76 @@ export function CallOverlay({
 
   async function flipCamera() {
     const room = roomRef.current;
-    if (!room || flipping) return;
     const next: CameraFacing = facing === "user" ? "environment" : "user";
     setFlipping(true);
     setFlipError(null);
     try {
-      const videoTrack = room.localParticipant.getTrackPublication(
-        Track.Source.Camera,
-      )?.videoTrack;
+      const videoTrack =
+        localMedia?.video ??
+        room?.localParticipant.getTrackPublication(Track.Source.Camera)
+          ?.videoTrack;
+      if (!videoTrack) {
+        await room?.localParticipant.setCameraEnabled(true, { facingMode: next });
+        setFacing(next);
+        return;
+      }
       const devices = await Room.getLocalDevices("videoinput");
-      const currentId = videoTrack?.mediaStreamTrack.getSettings().deviceId;
+      const currentId = videoTrack.mediaStreamTrack.getSettings().deviceId;
       const byLabel = devices.find((d) => {
         const label = d.label.toLowerCase();
         return next === "user"
           ? /front|user|facing|frontal|frente/.test(label)
           : /back|rear|environment|traseira|posterior/.test(label);
       });
-      const other = devices.find(
-        (d) => d.deviceId && d.deviceId !== currentId,
-      );
+      const other = devices.find((d) => d.deviceId && d.deviceId !== currentId);
       const options = byLabel?.deviceId
         ? { deviceId: byLabel.deviceId }
         : other?.deviceId
           ? { deviceId: other.deviceId }
           : { facingMode: next };
 
-      if (videoTrack) {
-        await videoTrack.restartTrack(options);
-      } else {
-        await room.localParticipant.setCameraEnabled(true, options);
-      }
-      if (room.options.videoCaptureDefaults) {
+      await videoTrack.restartTrack(options);
+      if (localVideoRef.current) videoTrack.attach(localVideoRef.current);
+      if (room?.options.videoCaptureDefaults) {
         room.options.videoCaptureDefaults.facingMode = next;
       }
-      attachLocalCamera(room, localVideoRef.current);
       setFacing(next);
     } catch {
       setFlipError("Não foi possível virar a câmera neste aparelho");
     } finally {
       setFlipping(false);
+    }
+  }
+
+  async function toggleMic() {
+    const room = roomRef.current;
+    const next = !micMuted;
+    try {
+      if (localMedia?.audio) {
+        if (next) await localMedia.audio.mute();
+        else await localMedia.audio.unmute();
+      } else {
+        await room?.localParticipant.setMicrophoneEnabled(!next);
+      }
+      setMicMuted(next);
+    } catch {
+      // ignore
+    }
+  }
+
+  async function toggleCam() {
+    const room = roomRef.current;
+    const next = !camOff;
+    try {
+      if (localMedia?.video) {
+        if (next) await localMedia.video.mute();
+        else await localMedia.video.unmute();
+      } else {
+        await room?.localParticipant.setCameraEnabled(!next);
+      }
+      setCamOff(next);
+    } catch {
+      // ignore
     }
   }
 
@@ -268,13 +430,9 @@ export function CallOverlay({
     );
   }
 
-  if (state.phase === "outgoing" || state.phase === "incoming") {
-    const peerName =
-      state.phase === "outgoing" ? state.peerName : state.offer.fromName;
-    const video =
-      state.phase === "outgoing" ? state.video : state.offer.video;
-    const label =
-      state.phase === "outgoing" ? "Chamando…" : "Chamada recebida";
+  if (state.phase === "incoming") {
+    const peerName = state.offer.fromName;
+    const video = state.offer.video;
 
     return (
       <div className="fixed inset-0 z-[60] flex items-center justify-center bg-gradient-to-b from-[#1a1610] via-[#0B0B0D] to-[#0B0B0D] p-6">
@@ -295,88 +453,76 @@ export function CallOverlay({
             {peerName}
           </h2>
           <p className="mt-2 text-sm text-[#9A9A9E]">
-            {label} · {video ? "Vídeo" : "Voz"}
+            Chamada recebida · {video ? "Vídeo" : "Voz"}
           </p>
           <div className="mt-10 flex items-center justify-center gap-6">
-            {state.phase === "incoming" ? (
-              <>
-                <button
-                  type="button"
-                  onClick={onReject}
-                  className="flex h-14 w-14 items-center justify-center rounded-full bg-red-500/90 text-white shadow-lg"
-                  aria-label="Recusar"
-                >
-                  ✕
-                </button>
-                <button
-                  type="button"
-                  onClick={onAccept}
-                  className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500 text-white shadow-lg"
-                  aria-label="Aceitar"
-                >
-                  ✓
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                onClick={onCancel}
-                className="rounded-xl border border-white/15 px-6 py-3 text-sm text-[#F2F2F0] hover:bg-white/5"
-              >
-                Cancelar
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={onReject}
+              className="flex h-14 w-14 items-center justify-center rounded-full bg-red-500/90 text-white shadow-lg"
+              aria-label="Recusar"
+            >
+              ✕
+            </button>
+            <button
+              type="button"
+              onClick={onAccept}
+              className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500 text-white shadow-lg"
+              aria-label="Aceitar"
+            >
+              ✓
+            </button>
           </div>
         </div>
       </div>
     );
   }
 
-  const video = state.accepted.video;
+  const video =
+    state.phase === "active" ? state.accepted.video : state.video;
+  const peerName = state.peerName;
+  const ringing = state.phase === "outgoing";
+  const statusLabel = ringing
+    ? "Chamando…"
+    : roomState === ConnectionState.Reconnecting
+      ? "Reconectando…"
+      : roomState === ConnectionState.Connecting
+        ? "Conectando…"
+        : remoteCount > 0
+          ? "Em chamada"
+          : "Aguardando…";
 
   return (
     <div className="fixed inset-0 z-[60] flex flex-col bg-[#0B0B0D]">
       <div className="relative flex-1 overflow-hidden">
         {video ? (
-          remotes.length > 1 ? (
-            <div className="grid h-full grid-cols-2 gap-1 bg-black p-1">
-              {remotes.map((remote) => (
-                <video
-                  key={remote.id}
-                  ref={(el) => {
-                    if (el) remoteVideos.current.set(remote.id, el);
-                    else remoteVideos.current.delete(remote.id);
-                  }}
-                  autoPlay
-                  playsInline
-                  className="h-full w-full object-cover"
-                />
-              ))}
-            </div>
-          ) : (
-            <video
-              ref={remoteVideoRef}
-              autoPlay
-              playsInline
-              className="h-full w-full object-cover"
-            />
-          )
+          <div
+            ref={remoteStageRef}
+            className={`h-full w-full bg-black ${
+              remoteCount > 1 ? "grid grid-cols-2 gap-1" : ""
+            }`}
+          />
         ) : (
-          <div className="flex h-full flex-col items-center justify-center bg-gradient-to-b from-[#1a1610] to-[#0B0B0D]">
-            <div className="flex h-32 w-32 items-center justify-center rounded-full bg-[#C9A227]/15 ring-1 ring-[#C9A227]/40">
-              <span className="text-4xl font-semibold text-[#C9A227]">
-                {state.peerName
-                  .split(/\s+/)
-                  .slice(0, 2)
-                  .map((p) => p[0]?.toUpperCase() ?? "")
-                  .join("") || "?"}
-              </span>
+          <>
+            <div
+              ref={remoteStageRef}
+              className="pointer-events-none absolute inset-0 overflow-hidden"
+            />
+            <div className="flex h-full flex-col items-center justify-center bg-gradient-to-b from-[#1a1610] to-[#0B0B0D]">
+              <div className="flex h-32 w-32 items-center justify-center rounded-full bg-[#C9A227]/15 ring-1 ring-[#C9A227]/40">
+                <span className="text-4xl font-semibold text-[#C9A227]">
+                  {peerName
+                    .split(/\s+/)
+                    .slice(0, 2)
+                    .map((p) => p[0]?.toUpperCase() ?? "")
+                    .join("") || "?"}
+                </span>
+              </div>
+              <p className="mt-4 text-lg text-[#F2F2F0]">{peerName}</p>
+              <p className="mt-1 text-sm text-[#9A9A9E]">{statusLabel}</p>
             </div>
-            <p className="mt-4 text-lg text-[#F2F2F0]">{state.peerName}</p>
-            <p className="mt-1 text-sm text-[#9A9A9E]">Em chamada</p>
-          </div>
+          </>
         )}
-        <audio ref={remoteAudioRef} autoPlay />
         {video ? (
           <video
             ref={localVideoRef}
@@ -384,37 +530,69 @@ export function CallOverlay({
             playsInline
             muted
             className={`absolute right-4 bottom-4 h-36 w-28 rounded-xl border border-white/10 object-cover shadow-xl ${
-              facing === "user" ? "-scale-x-100" : ""
-            }`}
+              facing === "user" && !camOff ? "-scale-x-100" : ""
+            } ${camOff ? "hidden" : ""}`}
           />
+        ) : null}
+        {video && remoteCount === 0 ? (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <p className="rounded-full bg-black/50 px-4 py-2 text-sm text-[#F2F2F0]">
+              {statusLabel}
+            </p>
+          </div>
         ) : null}
       </div>
 
       <div className="border-t border-white/5 px-4 py-4">
-        <div className="flex items-center justify-between">
-          <div>
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
             <p className="text-xs tracking-[0.2em] text-[#C9A227] uppercase">
               Remetum
             </p>
-            <p className="text-sm text-[#F2F2F0]">{state.peerName}</p>
+            <p className="truncate text-sm text-[#F2F2F0]">{peerName}</p>
+            <p className="text-xs text-[#9A9A9E]">{statusLabel}</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => void toggleMic()}
+              className={`rounded-xl border px-3 py-2.5 text-sm ${
+                micMuted
+                  ? "border-red-400/70 text-red-300"
+                  : "border-white/15 text-[#F2F2F0]"
+              }`}
+            >
+              {micMuted ? "Mic off" : "Mic"}
+            </button>
             {video ? (
-              <button
-                type="button"
-                disabled={flipping}
-                onClick={() => void flipCamera()}
-                className="rounded-xl border border-[#C9A227]/70 px-4 py-2.5 text-sm font-medium text-[#C9A227] hover:bg-[#C9A227] hover:text-[#0B0B0D] disabled:opacity-60"
-              >
-                {flipping ? "Trocando…" : "Virar câmera"}
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => void toggleCam()}
+                  className={`rounded-xl border px-3 py-2.5 text-sm ${
+                    camOff
+                      ? "border-red-400/70 text-red-300"
+                      : "border-white/15 text-[#F2F2F0]"
+                  }`}
+                >
+                  {camOff ? "Câm. off" : "Câmera"}
+                </button>
+                <button
+                  type="button"
+                  disabled={flipping || camOff}
+                  onClick={() => void flipCamera()}
+                  className="rounded-xl border border-[#C9A227]/70 px-3 py-2.5 text-sm font-medium text-[#C9A227] hover:bg-[#C9A227] hover:text-[#0B0B0D] disabled:opacity-60"
+                >
+                  {flipping ? "Trocando…" : "Virar"}
+                </button>
+              </>
             ) : null}
             <button
               type="button"
-              onClick={onHangup}
+              onClick={ringing ? onCancel : onHangup}
               className="rounded-xl bg-red-500 px-5 py-2.5 text-sm font-medium text-white"
             >
-              Encerrar
+              {ringing ? "Cancelar" : "Encerrar"}
             </button>
           </div>
         </div>
@@ -429,7 +607,7 @@ export function CallOverlay({
             <p className="text-sm text-red-300">{connectError}</p>
             <button
               type="button"
-              onClick={onHangup}
+              onClick={ringing ? onCancel : onHangup}
               className="mt-4 rounded-xl bg-[#C9A227] px-4 py-2 text-sm font-medium text-[#0B0B0D]"
             >
               Fechar

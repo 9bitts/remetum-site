@@ -30,6 +30,12 @@ import { registerPush, showLocalCallNotification, closeCallNotification } from "
 import { conversationPeer, conversationTitle } from "@/lib/format";
 import { useStayInAppBack } from "@/lib/back-stack";
 import {
+  acquireCallMedia,
+  callMediaErrorMessage,
+  stopCallMedia,
+  type CallMedia,
+} from "@/lib/call-media";
+import {
   dequeueOutbox,
   enqueueOutbox,
   outboxForConversation,
@@ -61,6 +67,13 @@ function tempId() {
   return `tmp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function callIdOf(state: CallUiState | null): string | null {
+  if (!state || state.phase === "error") return null;
+  if (state.phase === "outgoing") return state.callId;
+  if (state.phase === "incoming") return state.offer.callId;
+  return state.accepted.callId;
+}
+
 export function ChatShell() {
   const { user, loading, logout, setUser, refresh } = useAuth();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
@@ -83,6 +96,7 @@ export function ChatShell() {
   const [editing, setEditing] = useState<Message | null>(null);
   const [forwarding, setForwarding] = useState<Message | null>(null);
   const [callState, setCallState] = useState<CallUiState | null>(null);
+  const [callMedia, setCallMedia] = useState<CallMedia | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
   const [failedTempIds, setFailedTempIds] = useState<Set<string>>(
     () => new Set(),
@@ -91,10 +105,23 @@ export function ChatShell() {
   const selectedIdRef = useRef<string | null>(null);
   const loadGenRef = useRef(0);
   const deepLinkDone = useRef(false);
+  const callStateRef = useRef<CallUiState | null>(null);
+  const pendingCancelRef = useRef(false);
+  const startingCallRef = useRef(false);
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
+
+  useEffect(() => {
+    callStateRef.current = callState;
+  }, [callState]);
+
+  useEffect(() => {
+    if (callState && callState.phase !== "error") return;
+    stopCallMedia(callMedia);
+    if (callMedia) setCallMedia(null);
+  }, [callState, callMedia]);
 
   const selected = useMemo(
     () => conversations.find((c) => c.id === selectedId) ?? null,
@@ -122,8 +149,20 @@ export function ChatShell() {
       setNewChatOpen(false);
       return true;
     }
+    if (callState?.phase === "incoming") {
+      rejectCall();
+      return true;
+    }
+    if (callState?.phase === "outgoing") {
+      cancelCall();
+      return true;
+    }
+    if (callState?.phase === "active") {
+      hangupCall();
+      return true;
+    }
     if (callState?.phase === "error") {
-      setCallState(null);
+      clearCall();
       return true;
     }
     if (mobileShowChat) {
@@ -399,17 +438,43 @@ export function ChatShell() {
 
     const onCallOffer = (offer: CallOfferEvent) => {
       if (offer.fromUserId === user.id) {
+        if (pendingCancelRef.current) {
+          pendingCancelRef.current = false;
+          getSocket().emit(SOCKET_EVENTS.CALL_CANCEL, {
+            callId: offer.callId,
+            conversationId: offer.conversationId,
+          });
+          return;
+        }
         setCallState((prev) => {
           if (
             prev?.phase === "outgoing" &&
             prev.conversationId === offer.conversationId
           ) {
-            return { ...prev, callId: offer.callId };
+            return {
+              ...prev,
+              callId: offer.callId,
+              token: offer.token ?? prev.token,
+              livekitUrl: offer.livekitUrl ?? prev.livekitUrl,
+              roomName: offer.roomName ?? prev.roomName,
+            };
           }
           return prev;
         });
         return;
       }
+
+      const current = callStateRef.current;
+      const currentId = callIdOf(current);
+      if (current && current.phase !== "error") {
+        if (currentId === offer.callId) return;
+        getSocket().emit(SOCKET_EVENTS.CALL_REJECT, {
+          callId: offer.callId,
+          conversationId: offer.conversationId,
+        });
+        return;
+      }
+
       setCallState({ phase: "incoming", offer });
       void showLocalCallNotification({
         callId: offer.callId,
@@ -425,16 +490,49 @@ export function ChatShell() {
         if (prev?.phase === "active" && prev.accepted.callId === accepted.callId) {
           return prev;
         }
-        let peerName = "Chamada";
-        if (prev?.phase === "outgoing") peerName = prev.peerName;
-        else if (prev?.phase === "incoming") peerName = prev.offer.fromName;
-        return { phase: "active", accepted, peerName };
+        if (prev?.phase === "outgoing" && prev.callId === accepted.callId) {
+          return {
+            phase: "active",
+            peerName: prev.peerName,
+            accepted: {
+              ...accepted,
+              token: prev.token ?? accepted.token,
+              livekitUrl: prev.livekitUrl ?? accepted.livekitUrl,
+              roomName: prev.roomName ?? accepted.roomName,
+            },
+          };
+        }
+        if (prev?.phase === "incoming" && prev.offer.callId === accepted.callId) {
+          return {
+            phase: "active",
+            peerName: prev.offer.fromName,
+            accepted: {
+              ...accepted,
+              token: prev.offer.token ?? accepted.token,
+              livekitUrl: prev.offer.livekitUrl ?? accepted.livekitUrl,
+              roomName: prev.offer.roomName ?? accepted.roomName,
+            },
+          };
+        }
+        if (prev?.phase === "outgoing" || prev?.phase === "incoming") {
+          let peerName = "Chamada";
+          if (prev.phase === "outgoing") peerName = prev.peerName;
+          else peerName = prev.offer.fromName;
+          return { phase: "active", accepted, peerName };
+        }
+        return prev;
       });
     };
 
     const onCallEnded = (event: CallEndedEvent) => {
       void closeCallNotification(event.callId);
-      setCallState(null);
+      setCallState((prev) => {
+        if (!prev || prev.phase === "error") return prev;
+        if (prev.phase === "outgoing" && !prev.callId) {
+          return prev.conversationId === event.conversationId ? null : prev;
+        }
+        return callIdOf(prev) === event.callId ? null : prev;
+      });
     };
 
     const onSocketError = (payload: {
@@ -616,32 +714,88 @@ export function ChatShell() {
     }
   }
 
-  function startCall(video: boolean) {
-    if (!selected || !user) return;
-    const peer = conversationPeer(selected, user.id);
-    getSocket().emit(SOCKET_EVENTS.CALL_INVITE, {
-      conversationId: selected.id,
-      video,
-    });
-    setCallState({
-      phase: "outgoing",
-      conversationId: selected.id,
-      callId: null,
-      video,
-      peerName:
-        selected.type === "group"
-          ? selected.name || "Grupo"
-          : peer?.name ?? "Contato",
-    });
+  function clearCall() {
+    startingCallRef.current = false;
+    stopCallMedia(callMedia);
+    setCallMedia(null);
+    setCallState(null);
   }
 
-  function acceptCall() {
+  async function startCall(video: boolean) {
+    if (!selected || !user) return;
+    if (startingCallRef.current) return;
+    const current = callStateRef.current;
+    if (current && current.phase !== "error") return;
+    startingCallRef.current = true;
+    pendingCancelRef.current = false;
+    let media: CallMedia | null = null;
+    try {
+      media = await acquireCallMedia(video);
+      setCallMedia(media);
+      const peer = conversationPeer(selected, user.id);
+      getSocket().emit(SOCKET_EVENTS.CALL_INVITE, {
+        conversationId: selected.id,
+        video,
+      });
+      setCallState({
+        phase: "outgoing",
+        conversationId: selected.id,
+        callId: null,
+        token: null,
+        livekitUrl: null,
+        roomName: null,
+        video,
+        peerName:
+          selected.type === "group"
+            ? selected.name || "Grupo"
+            : peer?.name ?? "Contato",
+      });
+    } catch (err) {
+      stopCallMedia(media);
+      setCallMedia(null);
+      setCallState({
+        phase: "error",
+        message: callMediaErrorMessage(err),
+      });
+    } finally {
+      startingCallRef.current = false;
+    }
+  }
+
+  async function acceptCall() {
     if (callState?.phase !== "incoming") return;
-    void closeCallNotification(callState.offer.callId);
-    getSocket().emit(SOCKET_EVENTS.CALL_ACCEPT, {
-      callId: callState.offer.callId,
-      conversationId: callState.offer.conversationId,
-    });
+    const offer = callState.offer;
+    void closeCallNotification(offer.callId);
+    let media: CallMedia | null = null;
+    try {
+      media = await acquireCallMedia(offer.video);
+      setCallMedia(media);
+      getSocket().emit(SOCKET_EVENTS.CALL_ACCEPT, {
+        callId: offer.callId,
+        conversationId: offer.conversationId,
+      });
+      if (offer.token && offer.livekitUrl) {
+        setCallState({
+          phase: "active",
+          peerName: offer.fromName,
+          accepted: {
+            callId: offer.callId,
+            conversationId: offer.conversationId,
+            token: offer.token,
+            livekitUrl: offer.livekitUrl,
+            roomName: offer.roomName ?? `call_${offer.callId}`,
+            video: offer.video,
+          },
+        });
+      }
+    } catch (err) {
+      stopCallMedia(media);
+      setCallMedia(null);
+      setCallState({
+        phase: "error",
+        message: callMediaErrorMessage(err),
+      });
+    }
   }
 
   function rejectCall() {
@@ -651,17 +805,22 @@ export function ChatShell() {
       callId: callState.offer.callId,
       conversationId: callState.offer.conversationId,
     });
-    setCallState(null);
+    clearCall();
   }
 
   function cancelCall() {
     if (callState?.phase !== "outgoing") return;
-    if (callState.callId) void closeCallNotification(callState.callId);
-    getSocket().emit(SOCKET_EVENTS.CALL_CANCEL, {
-      callId: callState.callId ?? "",
-      conversationId: callState.conversationId,
-    });
-    setCallState(null);
+    if (callState.callId) {
+      pendingCancelRef.current = false;
+      void closeCallNotification(callState.callId);
+      getSocket().emit(SOCKET_EVENTS.CALL_CANCEL, {
+        callId: callState.callId,
+        conversationId: callState.conversationId,
+      });
+    } else {
+      pendingCancelRef.current = true;
+    }
+    clearCall();
   }
 
   function hangupCall() {
@@ -672,7 +831,7 @@ export function ChatShell() {
         conversationId: callState.accepted.conversationId,
       });
     }
-    setCallState(null);
+    clearCall();
   }
 
   async function forwardTo(conversationId: string) {
@@ -935,8 +1094,8 @@ export function ChatShell() {
             }}
             onGroupInfo={() => setGroupInfoOpen(true)}
             onLeaveGroup={() => void leaveGroup()}
-            onCallVoice={() => startCall(false)}
-            onCallVideo={() => startCall(true)}
+            onCallVoice={() => void startCall(false)}
+            onCallVideo={() => void startCall(true)}
             onLoadOlder={() => void loadOlder()}
           />
         ) : (
@@ -1036,11 +1195,12 @@ export function ChatShell() {
 
       <CallOverlay
         state={callState}
-        onAccept={acceptCall}
+        localMedia={callMedia}
+        onAccept={() => void acceptCall()}
         onReject={rejectCall}
         onCancel={cancelCall}
         onHangup={hangupCall}
-        onDismissError={() => setCallState(null)}
+        onDismissError={clearCall}
       />
     </div>
   );

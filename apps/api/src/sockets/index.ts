@@ -167,15 +167,30 @@ export async function createSocketServer(
 
     socket.emit("ready", { socketId: socket.id, userId });
 
+    const ringingUser = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { name: true },
+    });
     for (const call of await getRingingCallsForCallee(userId)) {
+      const livekitUrl = getLivekitUrl();
+      const token =
+        livekitUrl && livekitConfigured()
+          ? await createLivekitToken({
+              roomName: call.roomName,
+              identity: userId,
+              name: ringingUser?.name ?? "Usuário",
+            })
+          : undefined;
       socket.emit(SOCKET_EVENTS.CALL_OFFER, {
         callId: call.callId,
         conversationId: call.conversationId,
         fromUserId: call.fromUserId,
         fromName: call.fromName,
         video: call.video,
-        livekitUrl: getLivekitUrl(),
+        livekitUrl,
         group: call.group,
+        roomName: call.roomName,
+        token,
       });
     }
 
@@ -424,25 +439,58 @@ export async function createSocketServer(
           group: conversation.type === "group",
         });
 
-        const offer = {
-          callId: call.callId,
-          conversationId: payload.conversationId,
-          fromUserId: userId,
-          fromName: call.fromName,
-          video: call.video,
-          livekitUrl: getLivekitUrl(),
-          group: call.group,
-        };
-
-        for (const id of call.ringingIds) {
-          io.to(`user:${id}`).emit(SOCKET_EVENTS.CALL_OFFER, offer);
+        const livekitUrl = getLivekitUrl();
+        if (!livekitUrl) {
+          await endCall(call.callId);
+          throw Object.assign(new Error("LiveKit não configurado"), {
+            statusCode: 503,
+          });
         }
-        socket.emit(SOCKET_EVENTS.CALL_OFFER, offer);
+
+        try {
+          await ensureLivekitRoom(call.roomName);
+        } catch (err) {
+          await endCall(call.callId);
+          throw err;
+        }
+
+        const names = new Map(
+          conversation.participants.map((p) => [p.userId, p.user.name]),
+        );
+
+        async function offerFor(memberId: string) {
+          const token = await createLivekitToken({
+            roomName: call.roomName,
+            identity: memberId,
+            name: names.get(memberId) ?? "Usuário",
+          });
+          return {
+            callId: call.callId,
+            conversationId: payload.conversationId,
+            fromUserId: userId,
+            fromName: call.fromName,
+            video: call.video,
+            livekitUrl,
+            group: call.group,
+            roomName: call.roomName,
+            token,
+          };
+        }
+
+        try {
+          for (const id of call.ringingIds) {
+            io.to(`user:${id}`).emit(SOCKET_EVENTS.CALL_OFFER, await offerFor(id));
+          }
+          socket.emit(SOCKET_EVENTS.CALL_OFFER, await offerFor(userId));
+        } catch (err) {
+          await endCall(call.callId);
+          throw err;
+        }
 
         void notifyIncomingCall(call.ringingIds, {
           callId: call.callId,
           conversationId: payload.conversationId,
-          fromName: offer.fromName,
+          fromName: call.fromName,
           video: call.video,
         });
 

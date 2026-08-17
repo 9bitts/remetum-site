@@ -100,6 +100,8 @@ export interface CallOfferEvent {
   video: boolean;
   livekitUrl: string | null;
   group: boolean;
+  roomName?: string;
+  token?: string;
 }
 
 export interface CallAcceptedEvent {

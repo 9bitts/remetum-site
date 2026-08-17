@@ -1,5 +1,4 @@
-import { SignJWT } from "jose";
-import { RoomServiceClient } from "livekit-server-sdk";
+import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
 import { config, livekitConfigured } from "../config.js";
 
 export { livekitConfigured };
@@ -27,31 +26,26 @@ export async function createLivekitToken(input: {
   }
 
   const { apiKey, apiSecret } = credentials();
-  const now = Math.floor(Date.now() / 1000);
   const ttl = input.ttlSeconds ?? 60 * 30;
-
-  const token = await new SignJWT({
-    video: {
-      roomJoin: true,
-      room: input.roomName,
-      canPublish: true,
-      canSubscribe: true,
-      canPublishData: true,
-      roomCreate: false,
-    },
+  const token = new AccessToken(apiKey, apiSecret, {
+    identity: input.identity,
     name: input.name,
-  })
-    .setProtectedHeader({ alg: "HS256" })
-    .setIssuer(apiKey)
-    .setSubject(input.identity)
-    .setNotBefore(now - 60)
-    .setExpirationTime(now + ttl)
-    .sign(new TextEncoder().encode(apiSecret));
+    ttl,
+  });
+  token.addGrant({
+    roomJoin: true,
+    room: input.roomName,
+    roomCreate: true,
+    canPublish: true,
+    canSubscribe: true,
+    canPublishData: true,
+  });
 
-  if (typeof token !== "string" || token.length < 20) {
+  const jwt = await token.toJwt();
+  if (typeof jwt !== "string" || jwt.length < 20) {
     throw new Error("Falha ao gerar token LiveKit");
   }
-  return token;
+  return jwt;
 }
 
 function getRoomService() {
@@ -79,6 +73,7 @@ export async function ensureLivekitRoom(roomName: string) {
         { statusCode: 503 },
       );
     }
+    console.error("[livekit] createRoom failed", err);
   }
 }
 
