@@ -1021,24 +1021,6 @@ export function ChatShell() {
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-ebano-bg">
-      {!user.emailVerifiedAt ? (
-        <div className="flex items-center justify-between gap-3 border-b border-white/5 bg-ebano-surface px-4 py-2 text-xs">
-          <p className="text-ebano-muted">Confirme seu e-mail para recuperar a conta se precisar.</p>
-          <button
-            type="button"
-            className="text-ebano-accent hover:underline"
-            onClick={() => {
-              void api("/auth/verify-email/resend", { method: "POST" })
-                .then(() => alert("Enviamos um novo link, se o e-mail estiver configurado."))
-                .catch((err) =>
-                  alert(err instanceof Error ? err.message : "Falha ao reenviar"),
-                );
-            }}
-          >
-            Reenviar
-          </button>
-        </div>
-      ) : null}
       <div className="flex min-h-0 flex-1 overflow-hidden">
       <aside
         className={`w-full border-r border-white/5 md:w-[380px] md:shrink-0 ${
