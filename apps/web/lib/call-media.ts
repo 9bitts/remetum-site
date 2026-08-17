@@ -2,6 +2,7 @@ import {
   createLocalTracks,
   LocalAudioTrack,
   LocalVideoTrack,
+  VideoPresets,
   type LocalTrack,
 } from "livekit-client";
 
@@ -74,7 +75,9 @@ export async function acquireCallMedia(video: boolean): Promise<CallMedia> {
   try {
     const tracks = await createLocalTracks({
       audio,
-      video: video ? { facingMode: "user" } : false,
+      video: video
+        ? { facingMode: "user", resolution: VideoPresets.h720.resolution }
+        : false,
     });
     return pickTracks(tracks);
   } catch (err) {

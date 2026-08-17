@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ConnectionState,
   Room,
@@ -73,22 +73,34 @@ function connectionOf(state: CallUiState | null): RoomConnection | null {
   return null;
 }
 
-function attachMediaElement(
-  track: RemoteTrack | LocalTrack,
-  parent: HTMLElement | null,
-  className: string,
-  muted = false,
-) {
-  const el = track.attach();
+function playMedia(el: HTMLMediaElement) {
   el.autoplay = true;
-  el.muted = muted;
-  el.className = className;
   el.setAttribute("playsinline", "true");
-  if (el instanceof HTMLVideoElement) el.playsInline = true;
+  el.setAttribute("webkit-playsinline", "true");
+  if (el instanceof HTMLVideoElement) {
+    el.playsInline = true;
+    el.controls = false;
+  }
+  const attempt = () => void el.play().catch(() => undefined);
+  attempt();
+  el.onloadedmetadata = attempt;
+  el.oncanplay = attempt;
+}
+
+function attachToElement(
+  track: RemoteTrack | LocalTrack,
+  el: HTMLMediaElement | null,
+  muted: boolean,
+) {
+  if (!el) return;
+  el.muted = muted;
   if (el instanceof HTMLAudioElement) el.volume = 1;
-  parent?.appendChild(el);
-  void el.play().catch(() => undefined);
-  return el;
+  track.attach(el);
+  const mediaTrack = track.mediaStreamTrack;
+  if (mediaTrack && mediaTrack.readyState !== "ended") {
+    el.srcObject = new MediaStream([mediaTrack]);
+  }
+  playMedia(el);
 }
 
 export function CallOverlay({
@@ -117,11 +129,17 @@ export function CallOverlay({
   const [roomState, setRoomState] = useState<ConnectionState>(
     ConnectionState.Disconnected,
   );
-  const [remoteCount, setRemoteCount] = useState(0);
+  const [remotes, setRemotes] = useState<Array<{ id: string; name: string }>>(
+    [],
+  );
   const localMediaRef = useRef(localMedia);
   localMediaRef.current = localMedia;
   const roomRef = useRef<Room | null>(null);
-  const remoteStageRef = useRef<HTMLDivElement>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement>(null);
+  const remoteVideos = useRef<Map<string, HTMLVideoElement>>(new Map());
+  const remoteVideoTrackRef = useRef<RemoteTrack | null>(null);
+  const remoteVideoTracks = useRef<Map<string, RemoteTrack>>(new Map());
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const connection = connectionOf(state);
 
@@ -141,15 +159,17 @@ export function CallOverlay({
       setMicMuted(false);
       setCamOff(false);
       setRoomState(ConnectionState.Disconnected);
-      setRemoteCount(0);
+      setRemotes([]);
+      remoteVideoTrackRef.current = null;
+      remoteVideoTracks.current.clear();
       return;
     }
 
     let cancelled = false;
     const audioContext = getCallAudioContext();
     const room = new Room({
-      adaptiveStream: true,
-      dynacast: true,
+      adaptiveStream: false,
+      dynacast: false,
       webAudioMix: audioContext ? { audioContext } : true,
       audioCaptureDefaults: {
         echoCancellation: true,
@@ -159,35 +179,71 @@ export function CallOverlay({
       videoCaptureDefaults: {
         facingMode: "user",
       },
+      publishDefaults: {
+        simulcast: false,
+        videoCodec: "vp8",
+        dtx: true,
+      },
     });
     roomRef.current = room;
 
     function syncRemotes() {
-      setRemoteCount(room.remoteParticipants.size);
+      setRemotes(
+        [...room.remoteParticipants.values()].map((p) => ({
+          id: p.identity,
+          name: p.name || p.identity,
+        })),
+      );
     }
 
     function attachRemote(
       track: RemoteTrack,
       _publication: RemoteTrackPublication,
-      _participant: RemoteParticipant,
+      participant: RemoteParticipant,
     ) {
-      const isVideo = track.kind === Track.Kind.Video;
-      attachMediaElement(
-        track,
-        remoteStageRef.current,
-        isVideo
-          ? "h-full w-full min-h-0 object-cover"
-          : "pointer-events-none absolute h-px w-px opacity-0",
-        false,
-      );
+      if (track.kind === Track.Kind.Video) {
+        remoteVideoTrackRef.current = track;
+        remoteVideoTracks.current.set(participant.identity, track);
+        const el =
+          remoteVideos.current.get(participant.identity) ?? remoteVideoRef.current;
+        attachToElement(track, el, true);
+      }
+      if (track.kind === Track.Kind.Audio) {
+        attachToElement(track, remoteAudioRef.current, false);
+      }
       syncRemotes();
     }
 
-    function detachRemote(track: RemoteTrack) {
-      for (const el of track.detach()) {
-        el.remove();
+    function detachRemote(
+      track: RemoteTrack,
+      _publication: RemoteTrackPublication,
+      participant: RemoteParticipant,
+    ) {
+      track.detach();
+      if (track.kind === Track.Kind.Video) {
+        if (remoteVideoTrackRef.current === track) {
+          remoteVideoTrackRef.current = null;
+        }
+        remoteVideoTracks.current.delete(participant.identity);
+        const el =
+          remoteVideos.current.get(participant.identity) ?? remoteVideoRef.current;
+        if (el) el.srcObject = null;
       }
       syncRemotes();
+    }
+
+    function bindExistingRemoteTracks() {
+      for (const participant of room.remoteParticipants.values()) {
+        for (const pub of participant.trackPublications.values()) {
+          if (pub.track) {
+            attachRemote(
+              pub.track as RemoteTrack,
+              pub as RemoteTrackPublication,
+              participant,
+            );
+          }
+        }
+      }
     }
 
     room.on(RoomEvent.TrackSubscribed, attachRemote);
@@ -266,7 +322,7 @@ export function CallOverlay({
         }
 
         syncRemotes();
-        // Existing remote tracks arrive via TrackSubscribed after connect.
+        bindExistingRemoteTracks();
       } catch (err) {
         if (!cancelled) {
           setConnectError(
@@ -286,6 +342,20 @@ export function CallOverlay({
       if (roomRef.current === room) roomRef.current = null;
     };
   }, [connection?.callId, connection?.token, connection?.url]);
+
+  useLayoutEffect(() => {
+    if (remoteVideoTracks.current.size === 0) {
+      const fallback = remoteVideoTrackRef.current;
+      if (fallback && remoteVideoRef.current) {
+        attachToElement(fallback, remoteVideoRef.current, true);
+      }
+      return;
+    }
+    for (const [id, track] of remoteVideoTracks.current) {
+      const el = remoteVideos.current.get(id) ?? remoteVideoRef.current;
+      attachToElement(track, el, true);
+    }
+  }, [remotes, state?.phase]);
 
   useEffect(() => {
     if (!state || (state.phase !== "outgoing" && state.phase !== "active")) {
@@ -488,62 +558,83 @@ export function CallOverlay({
       ? "Reconectando…"
       : roomState === ConnectionState.Connecting
         ? "Conectando…"
-        : remoteCount > 0
+        : remotes.length > 0
           ? "Em chamada"
           : "Aguardando…";
 
   return (
-    <div className="fixed inset-0 z-[60] flex flex-col bg-[#0B0B0D]">
-      <div className="relative flex-1 overflow-hidden">
-        {video ? (
-          <div
-            ref={remoteStageRef}
-            className={`h-full w-full bg-black ${
-              remoteCount > 1 ? "grid grid-cols-2 gap-1" : ""
-            }`}
-          />
+    <div className="fixed inset-0 z-[60] bg-[#0B0B0D]">
+      {video ? (
+        remotes.length > 1 ? (
+          <div className="fixed inset-0 z-[60] grid grid-cols-2 bg-black">
+            {remotes.map((remote) => (
+              <video
+                key={remote.id}
+                ref={(el) => {
+                  if (el) {
+                    remoteVideos.current.set(remote.id, el);
+                    const track = remoteVideoTracks.current.get(remote.id);
+                    if (track) attachToElement(track, el, true);
+                  } else {
+                    remoteVideos.current.delete(remote.id);
+                  }
+                }}
+                autoPlay
+                playsInline
+                muted
+                className="h-full w-full bg-black object-cover"
+              />
+            ))}
+          </div>
         ) : (
-          <>
-            <div
-              ref={remoteStageRef}
-              className="pointer-events-none absolute inset-0 overflow-hidden"
-            />
-            <div className="flex h-full flex-col items-center justify-center bg-gradient-to-b from-[#1a1610] to-[#0B0B0D]">
-              <div className="flex h-32 w-32 items-center justify-center rounded-full bg-[#C9A227]/15 ring-1 ring-[#C9A227]/40">
-                <span className="text-4xl font-semibold text-[#C9A227]">
-                  {peerName
-                    .split(/\s+/)
-                    .slice(0, 2)
-                    .map((p) => p[0]?.toUpperCase() ?? "")
-                    .join("") || "?"}
-                </span>
-              </div>
-              <p className="mt-4 text-lg text-[#F2F2F0]">{peerName}</p>
-              <p className="mt-1 text-sm text-[#9A9A9E]">{statusLabel}</p>
-            </div>
-          </>
-        )}
-        {video ? (
           <video
-            ref={localVideoRef}
+            ref={(el) => {
+              remoteVideoRef.current = el;
+              const track = remoteVideoTrackRef.current;
+              if (el && track) attachToElement(track, el, true);
+            }}
             autoPlay
             playsInline
             muted
-            className={`absolute right-4 bottom-4 h-36 w-28 rounded-xl border border-white/10 object-cover shadow-xl ${
-              facing === "user" && !camOff ? "-scale-x-100" : ""
-            } ${camOff ? "hidden" : ""}`}
+            className="fixed inset-0 z-[60] h-full w-full bg-black object-cover"
           />
-        ) : null}
-        {video && remoteCount === 0 ? (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-            <p className="rounded-full bg-black/50 px-4 py-2 text-sm text-[#F2F2F0]">
-              {statusLabel}
-            </p>
+        )
+      ) : (
+        <div className="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-gradient-to-b from-[#1a1610] to-[#0B0B0D]">
+          <div className="flex h-32 w-32 items-center justify-center rounded-full bg-[#C9A227]/15 ring-1 ring-[#C9A227]/40">
+            <span className="text-4xl font-semibold text-[#C9A227]">
+              {peerName
+                .split(/\s+/)
+                .slice(0, 2)
+                .map((p) => p[0]?.toUpperCase() ?? "")
+                .join("") || "?"}
+            </span>
           </div>
-        ) : null}
-      </div>
+          <p className="mt-4 text-lg text-[#F2F2F0]">{peerName}</p>
+          <p className="mt-1 text-sm text-[#9A9A9E]">{statusLabel}</p>
+        </div>
+      )}
+      <audio ref={remoteAudioRef} autoPlay className="hidden" />
+      {video ? (
+        <video
+          ref={localVideoRef}
+          autoPlay
+          playsInline
+          muted
+          className={`fixed right-4 bottom-28 z-[62] h-36 w-28 rounded-xl border border-white/10 object-cover shadow-xl ${
+            facing === "user" && !camOff ? "-scale-x-100" : ""
+          } ${camOff ? "hidden" : ""}`}
+        />
+      ) : null}
+      {video && remotes.length === 0 ? (
+        <div className="pointer-events-none fixed inset-0 z-[61] flex items-center justify-center">
+          <p className="rounded-full bg-black/50 px-4 py-2 text-sm text-[#F2F2F0]">
+            {statusLabel}
+          </p>
+        </div>
+      ) : null}
 
-      <div className="border-t border-white/5 px-4 py-4">
+      <div className="fixed right-0 bottom-0 left-0 z-[63] border-t border-white/5 bg-[#0B0B0D]/95 px-4 py-4">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-xs tracking-[0.2em] text-[#C9A227] uppercase">
@@ -602,7 +693,7 @@ export function CallOverlay({
       </div>
 
       {connectError ? (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/80 p-6">
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 p-6">
           <div className="w-full max-w-sm rounded-[var(--radius-ebano)] border border-white/10 bg-[#121214] p-6 text-center">
             <p className="text-sm text-red-300">{connectError}</p>
             <button
