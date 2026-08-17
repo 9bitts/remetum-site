@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { openMediaFile } from "@/lib/media";
+import { shareMediaFile } from "@/lib/share";
 import { registerBackHandler } from "@/lib/back-stack";
 
 export function MediaLightbox({
@@ -10,12 +11,16 @@ export function MediaLightbox({
   kind,
   title,
   onClose,
+  onForward,
 }: {
   src: string;
   kind: "image" | "pdf";
   title?: string | null;
   onClose: () => void;
+  onForward?: () => void;
 }) {
+  const [sharing, setSharing] = useState(false);
+
   useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -35,6 +40,19 @@ export function MediaLightbox({
     };
   }, [onClose]);
 
+  async function share(e: MouseEvent) {
+    e.stopPropagation();
+    if (sharing) return;
+    setSharing(true);
+    try {
+      await shareMediaFile(src, title);
+    } catch {
+      window.alert("Não foi possível compartilhar este arquivo");
+    } finally {
+      setSharing(false);
+    }
+  }
+
   return createPortal(
     <div
       className="fixed inset-0 z-[80] flex flex-col bg-black/92"
@@ -43,11 +61,31 @@ export function MediaLightbox({
       aria-label={title || (kind === "image" ? "Imagem" : "Documento")}
       onClick={onClose}
     >
-      <div className="flex items-center justify-between gap-3 px-4 py-3">
+      <div className="flex flex-col gap-2 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-4">
         <p className="min-w-0 truncate text-sm text-white/80">
           {title || (kind === "image" ? "Imagem" : "Documento")}
         </p>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1 sm:gap-2">
+          {onForward ? (
+            <button
+              type="button"
+              className="rounded-xl px-3 py-1.5 text-sm text-white/80 hover:bg-white/10"
+              onClick={(e) => {
+                e.stopPropagation();
+                onForward();
+              }}
+            >
+              Encaminhar
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="rounded-xl px-3 py-1.5 text-sm text-white/80 hover:bg-white/10 disabled:opacity-50"
+            disabled={sharing}
+            onClick={(e) => void share(e)}
+          >
+            {sharing ? "Preparando…" : "Compartilhar"}
+          </button>
           <button
             type="button"
             className="rounded-xl px-3 py-1.5 text-sm text-white/80 hover:bg-white/10"

@@ -1164,7 +1164,7 @@ export function ChatShell() {
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center">
           <div className="max-h-[80dvh] w-full max-w-md overflow-y-auto rounded-[var(--radius-ebano)] bg-ebano-surface p-4 shadow-xl">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Encaminhar para</h2>
+              <h2 className="text-lg font-semibold">Encaminhar no Remetum</h2>
               <button
                 type="button"
                 onClick={() => setForwarding(null)}

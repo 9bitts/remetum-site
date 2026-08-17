@@ -70,8 +70,9 @@ export async function fetchWithAuth(
   input: string,
   init: RequestInit = {},
   retryOn401 = true,
+  timeoutMs = 12_000,
 ): Promise<Response> {
-  const timeout = withTimeout(init.signal ?? undefined, 12_000);
+  const timeout = withTimeout(init.signal ?? undefined, timeoutMs);
   try {
     const res = await fetch(input, {
       ...init,

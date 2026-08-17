@@ -6,6 +6,7 @@ import { formatCallMessage, parseCallMessage } from "@ebano/shared";
 import { formatTime } from "@/lib/format";
 import { splitMessageLinks, hrefForLink } from "@/lib/links";
 import { fileLooksLikePdf, mediaSrc, openMediaFile } from "@/lib/media";
+import { isShareableMedia, shareMediaFile } from "@/lib/share";
 import { MediaLightbox } from "./MediaLightbox";
 
 const QUICK_REACTIONS = ["❤️", "👍", "😂", "😮", "😢", "🙏"];
@@ -28,7 +29,21 @@ export function MessageBubble({
   onForward?: (message: Message) => void;
 }) {
   const [preview, setPreview] = useState<"image" | "pdf" | null>(null);
+  const [sharing, setSharing] = useState(false);
   const src = message.mediaUrl ? mediaSrc(message.mediaUrl) : undefined;
+  const canShareMedia = isShareableMedia(message.type) && Boolean(message.mediaUrl);
+
+  async function shareExternal() {
+    if (!message.mediaUrl || sharing) return;
+    setSharing(true);
+    try {
+      await shareMediaFile(message.mediaUrl, message.content);
+    } catch {
+      window.alert("Não foi possível compartilhar este arquivo");
+    } finally {
+      setSharing(false);
+    }
+  }
 
   if (message.deletedAt) {
     return (
@@ -208,6 +223,37 @@ export function MessageBubble({
           </div>
         ) : null}
 
+        {canShareMedia ? (
+          <div
+            className={`mt-1.5 flex flex-wrap gap-1.5 ${
+              mine ? "justify-end" : "justify-start"
+            }`}
+          >
+            {onForward ? (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded-lg bg-ebano-surface px-2 py-1 text-[11px] text-ebano-muted hover:text-ebano-accent"
+                onClick={() => onForward(message)}
+                aria-label="Encaminhar para outro usuário do Remetum"
+              >
+                <ForwardIcon />
+                Encaminhar
+              </button>
+            ) : null}
+            <button
+              type="button"
+              disabled={sharing}
+              className="inline-flex items-center gap-1 rounded-lg bg-ebano-surface px-2 py-1 text-[11px] text-ebano-muted hover:text-ebano-accent disabled:opacity-50"
+              onClick={() => void shareExternal()}
+              title="Compartilhar com outros apps, e-mail ou salvar"
+              aria-label="Compartilhar com outros aplicativos, e-mail ou salvar"
+            >
+              <ShareIcon />
+              {sharing ? "Preparando…" : "Compartilhar"}
+            </button>
+          </div>
+        ) : null}
+
         <div
           className={`mt-1 hidden gap-1 text-[11px] group-hover:flex ${
             mine ? "justify-end" : "justify-start"
@@ -216,7 +262,7 @@ export function MessageBubble({
           <button type="button" className="text-ebano-muted hover:text-ebano-accent" onClick={() => onReply(message)}>
             Responder
           </button>
-          {onForward ? (
+          {onForward && !canShareMedia ? (
             <button
               type="button"
               className="text-ebano-muted hover:text-ebano-accent"
@@ -253,9 +299,54 @@ export function MessageBubble({
           kind={preview}
           title={message.content}
           onClose={() => setPreview(null)}
+          onForward={
+            onForward
+              ? () => {
+                  setPreview(null);
+                  onForward(message);
+                }
+              : undefined
+          }
         />
       ) : null}
     </div>
+  );
+}
+
+function ForwardIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M15 7h6v6"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M21 7 10 18H3"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function ShareIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <circle cx="18" cy="5" r="3" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="6" cy="12" r="3" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="18" cy="19" r="3" stroke="currentColor" strokeWidth="1.8" />
+      <path
+        d="M8.6 10.6 15.4 6.4M8.6 13.4l6.8 4.2"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
   );
 }
 
