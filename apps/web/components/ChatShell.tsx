@@ -264,11 +264,13 @@ export function ChatShell() {
 
   const selectConversation = useCallback(
     async (id: string) => {
+      const switching = selectedIdRef.current !== id;
       setSelectedId(id);
       setMobileShowChat(true);
       setReplyTo(null);
       setEditing(null);
       setNextCursor(null);
+      if (switching) setMessages([]);
       getSocket().emit(SOCKET_EVENTS.CONVERSATION_JOIN, id);
       await loadMessages(id);
     },
@@ -1112,12 +1114,13 @@ export function ChatShell() {
       </aside>
 
       <section
-        className={`min-w-0 flex-1 ${
+        className={`min-h-0 min-w-0 flex-1 ${
           mobileShowChat ? "flex" : "hidden md:flex"
         } flex-col`}
       >
         {selected ? (
           <ChatView
+            key={selected.id}
             conversation={selected}
             currentUserId={user.id}
             messages={displayMessages}

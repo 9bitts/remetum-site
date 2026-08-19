@@ -235,7 +235,7 @@ export function Composer({
   }
 
   return (
-    <div className="border-t border-white/5 bg-ebano-bg/90 backdrop-blur">
+    <div className="shrink-0 border-t border-white/5 bg-ebano-bg/90 backdrop-blur">
       {replyTo ? (
         <div className="flex items-stretch gap-2 px-3 pt-2">
           <div className="flex min-w-0 flex-1 overflow-hidden rounded-lg border-l-[3px] border-ebano-accent bg-ebano-surface">

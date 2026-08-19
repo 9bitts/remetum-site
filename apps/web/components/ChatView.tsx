@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { ConversationSummary, Message } from "@ebano/shared";
 import { Avatar } from "./Avatar";
 import { Composer } from "./Composer";
@@ -80,10 +87,13 @@ export function ChatView({
   onLoadOlder: () => void;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const pendingScrollRestore = useRef<number | null>(null);
   const wasLoadingOlder = useRef(false);
+  const scrollerWasCollapsed = useRef(true);
+  const pinning = useRef(false);
+  const lastMessageId = messages[messages.length - 1]?.id;
   const [muteOpen, setMuteOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
@@ -123,6 +133,7 @@ export function ChatView({
   function jumpToMessage(messageId: string) {
     const el = document.getElementById(`msg-${messageId}`);
     if (!el) return;
+    stickToBottom.current = false;
     el.scrollIntoView({ behavior: "smooth", block: "center" });
     setHighlightedId(messageId);
     window.setTimeout(() => {
@@ -130,11 +141,56 @@ export function ChatView({
     }, 1400);
   }
 
-  useEffect(() => {
+  function pinToBottom() {
+    const el = listRef.current;
+    if (!el) return;
+    pinning.current = true;
+    el.scrollTop = el.scrollHeight;
+    requestAnimationFrame(() => {
+      pinning.current = false;
+    });
+  }
+
+  function pinIfSticky() {
     if (!stickToBottom.current) return;
     if (pendingScrollRestore.current !== null) return;
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, typingNames.length]);
+    pinToBottom();
+  }
+
+  useLayoutEffect(() => {
+    stickToBottom.current = true;
+    pendingScrollRestore.current = null;
+    scrollerWasCollapsed.current = true;
+    pinToBottom();
+  }, [conversation.id]);
+
+  useLayoutEffect(() => {
+    pinIfSticky();
+  }, [lastMessageId, messages.length, typingNames.length]);
+
+  useEffect(() => {
+    const scroller = listRef.current;
+    const content = contentRef.current;
+    if (!scroller) return;
+
+    const onSize = () => {
+      const collapsed = scroller.clientHeight < 2;
+      if (scrollerWasCollapsed.current && !collapsed) {
+        stickToBottom.current = true;
+        pendingScrollRestore.current = null;
+        pinToBottom();
+      } else {
+        pinIfSticky();
+      }
+      scrollerWasCollapsed.current = collapsed;
+    };
+
+    onSize();
+    const ro = new ResizeObserver(onSize);
+    ro.observe(scroller);
+    if (content) ro.observe(content);
+    return () => ro.disconnect();
+  }, [conversation.id]);
 
   useEffect(() => {
     if (wasLoadingOlder.current && !loadingOlder) {
@@ -171,7 +227,7 @@ export function ChatView({
 
   function handleScroll() {
     const el = listRef.current;
-    if (!el) return;
+    if (!el || pinning.current) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     stickToBottom.current = nearBottom;
     if (el.scrollTop < 80 && hasMoreOlder && !loadingOlder) {
@@ -184,8 +240,8 @@ export function ChatView({
     "flex h-9 w-9 items-center justify-center rounded-xl text-ebano-accent hover:bg-white/5";
 
   return (
-    <div className="flex h-full flex-col bg-[radial-gradient(ellipse_at_top,_#141418_0%,_#0B0B0D_50%)]">
-      <header className="flex items-center gap-2 border-b border-white/5 px-3 py-3">
+    <div className="flex h-full min-h-0 flex-col bg-[radial-gradient(ellipse_at_top,_#141418_0%,_#0B0B0D_50%)]">
+      <header className="flex shrink-0 items-center gap-2 border-b border-white/5 px-3 py-3">
         <button
           type="button"
           onClick={onBack}
@@ -379,30 +435,31 @@ export function ChatView({
       <div
         ref={listRef}
         onScroll={handleScroll}
-        className="flex-1 space-y-2 overflow-y-auto px-3 py-4"
+        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-4 [overflow-anchor:none]"
       >
-        {loadingOlder ? (
-          <p className="py-2 text-center text-xs text-ebano-muted">
-            Carregando…
-          </p>
-        ) : null}
-        {messages.map((message) => (
-          <MessageBubble
-            key={message.id}
-            message={message}
-            mine={message.senderId === currentUserId}
-            senderNames={senderNames}
-            currentUserId={currentUserId}
-            highlighted={highlightedId === message.id}
-            onReply={onReply}
-            onReact={onReact}
-            onEdit={onEdit}
-            onDelete={onDelete}
-            onForward={onForward}
-            onJumpTo={jumpToMessage}
-          />
-        ))}
-        <div ref={bottomRef} />
+        <div ref={contentRef} className="space-y-2">
+          {loadingOlder ? (
+            <p className="py-2 text-center text-xs text-ebano-muted">
+              Carregando…
+            </p>
+          ) : null}
+          {messages.map((message) => (
+            <MessageBubble
+              key={message.id}
+              message={message}
+              mine={message.senderId === currentUserId}
+              senderNames={senderNames}
+              currentUserId={currentUserId}
+              highlighted={highlightedId === message.id}
+              onReply={onReply}
+              onReact={onReact}
+              onEdit={onEdit}
+              onDelete={onDelete}
+              onForward={onForward}
+              onJumpTo={jumpToMessage}
+            />
+          ))}
+        </div>
       </div>
 
       <Composer
