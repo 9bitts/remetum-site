@@ -1134,11 +1134,17 @@ export function ChatShell() {
                 isTyping,
               })
             }
-            onReply={setReplyTo}
+            onReply={(message) => {
+              setEditing(null);
+              setReplyTo(message);
+            }}
             onReact={(messageId, emoji) =>
               getSocket().emit(SOCKET_EVENTS.MESSAGE_REACT, { messageId, emoji })
             }
-            onEdit={setEditing}
+            onEdit={(message) => {
+              setReplyTo(null);
+              setEditing(message);
+            }}
             onDelete={(messageId) =>
               getSocket().emit(SOCKET_EVENTS.MESSAGE_DELETE, { messageId })
             }

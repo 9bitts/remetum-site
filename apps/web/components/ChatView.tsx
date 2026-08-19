@@ -86,6 +86,7 @@ export function ChatView({
   const wasLoadingOlder = useRef(false);
   const [muteOpen, setMuteOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const peer = conversationPeer(conversation, currentUserId);
   const title = conversationTitle(conversation, currentUserId);
   const isDirect = conversation.type === "direct";
@@ -103,7 +104,31 @@ export function ChatView({
     }
     if (peer?.status === "online") return "online";
     return formatLastSeen(peer?.lastSeenAt ?? null);
-  }, [typingNames, conversation, peer]);
+  }, [conversation, peer, typingNames]);
+
+  const senderNames = useMemo(() => {
+    const names: Record<string, string> = {};
+    for (const participant of conversation.participants) {
+      names[participant.id] = participant.name;
+    }
+    return names;
+  }, [conversation.participants]);
+
+  const replySenderName = replyTo
+    ? replyTo.senderId === currentUserId
+      ? "Você"
+      : senderNames[replyTo.senderId] || "Mensagem"
+    : undefined;
+
+  function jumpToMessage(messageId: string) {
+    const el = document.getElementById(`msg-${messageId}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightedId(messageId);
+    window.setTimeout(() => {
+      setHighlightedId((current) => (current === messageId ? null : current));
+    }, 1400);
+  }
 
   useEffect(() => {
     if (!stickToBottom.current) return;
@@ -366,11 +391,15 @@ export function ChatView({
             key={message.id}
             message={message}
             mine={message.senderId === currentUserId}
+            senderNames={senderNames}
+            currentUserId={currentUserId}
+            highlighted={highlightedId === message.id}
             onReply={onReply}
             onReact={onReact}
             onEdit={onEdit}
             onDelete={onDelete}
             onForward={onForward}
+            onJumpTo={jumpToMessage}
           />
         ))}
         <div ref={bottomRef} />
@@ -379,6 +408,7 @@ export function ChatView({
       <Composer
         conversationId={conversation.id}
         replyTo={replyTo}
+        replySenderName={replySenderName}
         editing={editing}
         onCancelReply={onCancelReply}
         onCancelEdit={onCancelEdit}

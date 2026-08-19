@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { Message } from "@ebano/shared";
 import { formatCallMessage, parseCallMessage } from "@ebano/shared";
-import { formatTime } from "@/lib/format";
+import { formatTime, messagePreview } from "@/lib/format";
 import { splitMessageLinks, hrefForLink } from "@/lib/links";
 import { fileLooksLikePdf, mediaSrc, openMediaFile } from "@/lib/media";
 import { isShareableMedia, shareMediaFile } from "@/lib/share";
@@ -14,19 +14,27 @@ const QUICK_REACTIONS = ["❤️", "👍", "😂", "😮", "😢", "🙏"];
 export function MessageBubble({
   message,
   mine,
+  senderNames,
+  currentUserId,
+  highlighted,
   onReply,
   onReact,
   onEdit,
   onDelete,
   onForward,
+  onJumpTo,
 }: {
   message: Message;
   mine: boolean;
+  senderNames?: Record<string, string>;
+  currentUserId?: string;
+  highlighted?: boolean;
   onReply: (message: Message) => void;
   onReact: (messageId: string, emoji: string) => void;
   onEdit: (message: Message) => void;
   onDelete: (messageId: string) => void;
   onForward?: (message: Message) => void;
+  onJumpTo?: (messageId: string) => void;
 }) {
   const [preview, setPreview] = useState<"image" | "pdf" | null>(null);
   const [sharing, setSharing] = useState(false);
@@ -45,9 +53,14 @@ export function MessageBubble({
     }
   }
 
+  function senderLabel(senderId: string) {
+    if (currentUserId && senderId === currentUserId) return "Você";
+    return senderNames?.[senderId] || "Mensagem";
+  }
+
   if (message.deletedAt) {
     return (
-      <div className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+      <div id={`msg-${message.id}`} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
         <div className="rounded-[var(--radius-ebano)] bg-ebano-surface/60 px-3 py-2 text-sm italic text-ebano-muted">
           Mensagem apagada
         </div>
@@ -66,25 +79,35 @@ export function MessageBubble({
   }
 
   return (
-    <div className={`group flex ${mine ? "justify-end" : "justify-start"}`}>
-      <div className="max-w-[85%]">
+    <div
+      id={`msg-${message.id}`}
+      className={`group/msg flex ${mine ? "justify-end" : "justify-start"}`}
+    >
+      <div
+        className={`flex max-w-[92%] items-start gap-1.5 ${
+          mine ? "flex-row-reverse" : ""
+        }`}
+      >
+        <div className="min-w-0">
         <div
-          className={`rounded-[var(--radius-ebano)] px-3 py-2 ${
+          className={`rounded-[var(--radius-ebano)] px-3 py-2 transition ${
             mine ? "bg-ebano-sent text-ebano-text" : "bg-ebano-surface text-ebano-text"
-          }`}
+          } ${highlighted ? "ring-2 ring-ebano-accent/60" : ""}`}
         >
           {message.replyTo ? (
-            <div className="mb-2 rounded-lg border-l-2 border-ebano-accent bg-black/20 px-2 py-1 text-xs text-ebano-muted">
-              <p className="truncate">
-                {message.replyTo.type === "text"
-                  ? message.replyTo.content
-                  : message.replyTo.type === "image"
-                    ? "📷 Imagem"
-                    : message.replyTo.type === "audio"
-                      ? "🎤 Áudio"
-                      : "📎 Anexo"}
+            <button
+              type="button"
+              onClick={() => onJumpTo?.(message.replyTo!.id)}
+              className="mb-2 w-full rounded-lg border-l-2 border-ebano-accent bg-black/20 px-2 py-1 text-left"
+              aria-label="Ir para a mensagem citada"
+            >
+              <p className="truncate text-[11px] font-medium text-ebano-accent">
+                {senderLabel(message.replyTo.senderId)}
               </p>
-            </div>
+              <p className="truncate text-xs text-ebano-muted">
+                {messagePreview(message.replyTo)}
+              </p>
+            </button>
           ) : null}
 
           {message.type === "image" && src ? (
@@ -255,13 +278,10 @@ export function MessageBubble({
         ) : null}
 
         <div
-          className={`mt-1 hidden gap-1 text-[11px] group-hover:flex ${
+          className={`mt-1 hidden gap-1 text-[11px] group-hover/msg:flex ${
             mine ? "justify-end" : "justify-start"
           }`}
         >
-          <button type="button" className="text-ebano-muted hover:text-ebano-accent" onClick={() => onReply(message)}>
-            Responder
-          </button>
           {onForward && !canShareMedia ? (
             <button
               type="button"
@@ -292,6 +312,16 @@ export function MessageBubble({
             </button>
           ) : null}
         </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => onReply(message)}
+          className="mt-1 flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full bg-ebano-surface text-ebano-muted shadow-sm transition hover:bg-white/10 hover:text-ebano-accent md:h-8 md:w-8 md:opacity-0 md:group-hover/msg:opacity-100"
+          title="Responder"
+          aria-label="Responder a esta mensagem"
+        >
+          <ReplyArrowIcon />
+        </button>
       </div>
       {preview && src ? (
         <MediaLightbox
@@ -310,6 +340,14 @@ export function MessageBubble({
         />
       ) : null}
     </div>
+  );
+}
+
+function ReplyArrowIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <path d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1.5-7-5.5-10-11-11Z" />
+    </svg>
   );
 }
 

@@ -3,6 +3,7 @@
 import type { FormEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import type { Message } from "@ebano/shared";
+import { messagePreview } from "@/lib/format";
 import { uploadMedia } from "@/lib/upload";
 import { registerBackHandler } from "@/lib/back-stack";
 import { VoiceCapture } from "@/lib/voice-record";
@@ -11,6 +12,7 @@ export function Composer({
   disabled,
   conversationId,
   replyTo,
+  replySenderName,
   editing,
   onCancelReply,
   onCancelEdit,
@@ -20,6 +22,7 @@ export function Composer({
   disabled?: boolean;
   conversationId?: string;
   replyTo: Message | null;
+  replySenderName?: string;
   editing: Message | null;
   onCancelReply: () => void;
   onCancelEdit: () => void;
@@ -51,6 +54,11 @@ export function Composer({
   useEffect(() => {
     if (editing) setText(editing.content ?? "");
   }, [editing]);
+
+  useEffect(() => {
+    if (!replyTo || editing) return;
+    textareaRef.current?.focus();
+  }, [replyTo, editing]);
 
   useEffect(() => {
     if (!conversationId || editing) return;
@@ -229,16 +237,21 @@ export function Composer({
   return (
     <div className="border-t border-white/5 bg-ebano-bg/90 backdrop-blur">
       {replyTo ? (
-        <div className="flex items-center justify-between px-3 pt-2 text-xs text-ebano-muted">
-          <span>
-            Respondendo:{" "}
-            {replyTo.type === "text"
-              ? replyTo.content
-              : replyTo.type === "audio"
-                ? "🎤 Áudio"
-                : "anexo"}
-          </span>
-          <button type="button" onClick={onCancelReply}>
+        <div className="flex items-stretch gap-2 px-3 pt-2">
+          <div className="flex min-w-0 flex-1 overflow-hidden rounded-lg border-l-[3px] border-ebano-accent bg-ebano-surface">
+            <div className="min-w-0 flex-1 px-3 py-1.5">
+              <p className="truncate text-xs font-medium text-ebano-accent">
+                {replySenderName || "Mensagem"}
+              </p>
+              <p className="truncate text-xs text-ebano-muted">{messagePreview(replyTo)}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onCancelReply}
+            className="px-1 text-ebano-muted hover:text-ebano-text"
+            aria-label="Cancelar resposta"
+          >
             ✕
           </button>
         </div>
