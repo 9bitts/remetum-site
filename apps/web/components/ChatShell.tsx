@@ -118,6 +118,33 @@ export function ChatShell() {
   const callStateRef = useRef<CallUiState | null>(null);
   const pendingCancelRef = useRef(false);
   const startingCallRef = useRef(false);
+  const inFlightTempIds = useRef(new Set<string>());
+  const flushOutboxRef = useRef<() => void>(() => undefined);
+
+  function ackOutbox(clientTempId?: string) {
+    if (!clientTempId) return;
+    inFlightTempIds.current.delete(clientTempId);
+    dequeueOutbox(clientTempId);
+  }
+
+  function flushOutbox() {
+    const socket = getSocket();
+    if (!socket.connected) return;
+    for (const item of readOutbox()) {
+      if (inFlightTempIds.current.has(item.clientTempId)) continue;
+      inFlightTempIds.current.add(item.clientTempId);
+      socket.emit(SOCKET_EVENTS.MESSAGE_SEND, {
+        conversationId: item.conversationId,
+        content: item.content,
+        type: item.type,
+        mediaUrl: item.mediaUrl,
+        durationMs: item.durationMs,
+        replyToId: item.replyToId,
+        clientTempId: item.clientTempId,
+      });
+    }
+  }
+  flushOutboxRef.current = flushOutbox;
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
@@ -404,7 +431,7 @@ export function ChatShell() {
         });
       });
 
-      if (event.clientTempId) dequeueOutbox(event.clientTempId);
+      if (event.clientTempId) ackOutbox(event.clientTempId);
       if (selectedIdRef.current === msg.conversationId) {
         setMessages((prev) => {
           if (event.clientTempId) {
@@ -426,20 +453,26 @@ export function ChatShell() {
 
     const onSent = (event: MessageSentEvent) => {
       if (!event.clientTempId) return;
-      dequeueOutbox(event.clientTempId);
+      ackOutbox(event.clientTempId);
       setFailedTempIds((prev) => {
         if (!prev.has(event.clientTempId!)) return prev;
         const next = new Set(prev);
         next.delete(event.clientTempId!);
         return next;
       });
-      setMessages((prev) =>
-        prev.map((m) =>
+      setMessages((prev) => {
+        const next = prev.map((m) =>
           m.id === event.clientTempId
             ? { ...m, id: event.messageId, createdAt: event.createdAt }
             : m,
-        ),
-      );
+        );
+        const seen = new Set<string>();
+        return next.filter((m) => {
+          if (seen.has(m.id)) return false;
+          seen.add(m.id);
+          return true;
+        });
+      });
     };
 
     const onUpdated = (event: MessageUpdatedEvent) => {
@@ -609,20 +642,23 @@ export function ChatShell() {
         });
       }
       if (payload.event === SOCKET_EVENTS.MESSAGE_SEND && payload.clientTempId) {
+        inFlightTempIds.current.delete(payload.clientTempId);
         setFailedTempIds((prev) => new Set(prev).add(payload.clientTempId!));
       }
     };
 
     const onConnect = () => {
       void syncAfterReconnect();
-      const socketNow = getSocket();
-      if (!socketNow.connected) return;
-      for (const item of readOutbox()) {
-        socketNow.emit(SOCKET_EVENTS.MESSAGE_SEND, item);
-      }
+      flushOutboxRef.current();
+    };
+
+    const onDisconnect = () => {
+      inFlightTempIds.current.clear();
     };
 
     socket.on("connect", onConnect);
+    socket.on("disconnect", onDisconnect);
+    if (socket.connected) flushOutboxRef.current();
     socket.on(SOCKET_EVENTS.MESSAGE_NEW, onNew);
     socket.on(SOCKET_EVENTS.MESSAGE_SENT, onSent);
     socket.on(SOCKET_EVENTS.MESSAGE_UPDATED, onUpdated);
@@ -651,6 +687,7 @@ export function ChatShell() {
 
     return () => {
       socket.off("connect", onConnect);
+      socket.off("disconnect", onDisconnect);
       socket.off(SOCKET_EVENTS.MESSAGE_NEW, onNew);
       socket.off(SOCKET_EVENTS.MESSAGE_SENT, onSent);
       socket.off(SOCKET_EVENTS.MESSAGE_UPDATED, onUpdated);
@@ -731,15 +768,7 @@ export function ChatShell() {
       replyToId: input.replyToId,
       createdAt: optimistic.createdAt,
     });
-    getSocket().emit(SOCKET_EVENTS.MESSAGE_SEND, {
-      conversationId: selectedId,
-      content: input.content,
-      type: input.type,
-      mediaUrl: input.mediaUrl,
-      durationMs: input.durationMs,
-      replyToId: input.replyToId,
-      clientTempId,
-    });
+    flushOutbox();
   }
 
   function sendToConversation(
@@ -760,13 +789,7 @@ export function ChatShell() {
       mediaUrl: input.mediaUrl,
       createdAt: new Date().toISOString(),
     });
-    getSocket().emit(SOCKET_EVENTS.MESSAGE_SEND, {
-      conversationId,
-      content: input.content,
-      type: input.type,
-      mediaUrl: input.mediaUrl,
-      clientTempId,
-    });
+    flushOutbox();
   }
 
   async function deliverIncoming(conversationId: string) {

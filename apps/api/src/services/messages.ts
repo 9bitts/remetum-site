@@ -18,8 +18,65 @@ async function loadMessage(messageId: string) {
 const MAX_CONTENT = 4000;
 const MAX_EMOJI = 16;
 const MAX_FORWARD = 20;
+const MAX_TEMP_ID = 80;
+const IDEMPOTENCY_CACHE_MAX = 2000;
+
+const inflightByTempId = new Map<string, Promise<ReturnType<typeof toMessage>>>();
+
+function rememberTempId(
+  key: string,
+  pending: Promise<ReturnType<typeof toMessage>>,
+) {
+  inflightByTempId.set(key, pending);
+  if (inflightByTempId.size <= IDEMPOTENCY_CACHE_MAX) return;
+  const oldest = inflightByTempId.keys().next().value;
+  if (oldest && oldest !== key) inflightByTempId.delete(oldest);
+}
 
 export async function createMessage(input: {
+  conversationId: string;
+  senderId: string;
+  content?: string;
+  type: MessageType;
+  mediaUrl?: string;
+  durationMs?: number;
+  replyToId?: string;
+  clientTempId?: string;
+}) {
+  const created = await createMessageResult(input);
+  return created.message;
+}
+
+export async function createMessageResult(input: {
+  conversationId: string;
+  senderId: string;
+  content?: string;
+  type: MessageType;
+  mediaUrl?: string;
+  durationMs?: number;
+  replyToId?: string;
+  clientTempId?: string;
+}) {
+  const tempId = input.clientTempId?.trim().slice(0, MAX_TEMP_ID);
+  if (!tempId) {
+    return { message: await persistMessage(input), duplicate: false };
+  }
+
+  const key = `${input.senderId}:${tempId}`;
+  const existing = inflightByTempId.get(key);
+  if (existing) {
+    return { message: await existing, duplicate: true };
+  }
+
+  const pending = persistMessage(input).catch((err) => {
+    inflightByTempId.delete(key);
+    throw err;
+  });
+  rememberTempId(key, pending);
+  return { message: await pending, duplicate: false };
+}
+
+async function persistMessage(input: {
   conversationId: string;
   senderId: string;
   content?: string;

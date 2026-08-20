@@ -44,6 +44,14 @@ export function Composer({
   const typingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const capture = useRef(new VoiceCapture());
   const onFileRef = useRef<(file: File) => Promise<void>>(async () => undefined);
+  const sendingFileRef = useRef(false);
+  const ignorePasteUntil = useRef(0);
+  const lastFileRef = useRef<{
+    size: number;
+    lastModified: number;
+    type: string;
+    at: number;
+  } | null>(null);
   const pasteGuard = useRef({
     disabled: Boolean(disabled),
     uploading: false,
@@ -104,7 +112,16 @@ export function Composer({
   useEffect(() => {
     function handlePaste(event: ClipboardEvent) {
       const guard = pasteGuard.current;
-      if (guard.disabled || guard.uploading || guard.editing || guard.recording) return;
+      if (
+        guard.disabled ||
+        guard.uploading ||
+        guard.editing ||
+        guard.recording ||
+        sendingFileRef.current ||
+        Date.now() < ignorePasteUntil.current
+      ) {
+        return;
+      }
 
       const target = event.target;
       if (target instanceof HTMLElement) {
@@ -167,10 +184,19 @@ export function Composer({
   }
 
   async function onFile(file: File) {
+    if (disabled || uploading || editing || recording || sendingFileRef.current) return;
+    if (isRecentDuplicateFile(file, lastFileRef.current)) return;
+    sendingFileRef.current = true;
     setError(null);
     setUploading(true);
     try {
       const data = await uploadMedia(file);
+      lastFileRef.current = {
+        size: file.size,
+        lastModified: file.lastModified,
+        type: file.type,
+        at: Date.now(),
+      };
       onSend({
         type: data.type,
         mediaUrl: data.url,
@@ -180,6 +206,7 @@ export function Composer({
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload falhou");
     } finally {
+      sendingFileRef.current = false;
       setUploading(false);
       if (fileRef.current) fileRef.current.value = "";
     }
@@ -282,7 +309,10 @@ export function Composer({
           className="hidden"
           onChange={(e) => {
             const file = e.target.files?.[0];
-            if (file) void onFile(file);
+            e.target.value = "";
+            if (!file) return;
+            ignorePasteUntil.current = Date.now() + 8000;
+            void onFile(file);
           }}
         />
         <button
@@ -337,6 +367,19 @@ export function Composer({
         </button>
       </form>
     </div>
+  );
+}
+
+function isRecentDuplicateFile(
+  file: File,
+  previous: { size: number; lastModified: number; type: string; at: number } | null,
+) {
+  if (!previous) return false;
+  if (Date.now() - previous.at > 8000) return false;
+  return (
+    previous.size === file.size &&
+    previous.lastModified === file.lastModified &&
+    previous.type === file.type
   );
 }
 

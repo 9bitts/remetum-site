@@ -17,7 +17,7 @@ import { prisma } from "../prisma.js";
 import { getRedis } from "../redis.js";
 import {
   createCallEventMessage,
-  createMessage,
+  createMessageResult,
   deleteMessageForEveryone,
   editMessage,
   markDeliveredForUser,
@@ -201,7 +201,7 @@ export async function createSocketServer(
             statusCode: 400,
           });
         }
-        const message = await createMessage({
+        const { message, duplicate } = await createMessageResult({
           conversationId: payload.conversationId,
           senderId: userId,
           content: payload.content,
@@ -209,6 +209,7 @@ export async function createSocketServer(
           mediaUrl: payload.mediaUrl,
           durationMs: payload.durationMs,
           replyToId: payload.replyToId,
+          clientTempId: payload.clientTempId,
         });
 
         socket.emit(SOCKET_EVENTS.MESSAGE_SENT, {
@@ -221,6 +222,8 @@ export async function createSocketServer(
           SOCKET_EVENTS.MESSAGE_NEW,
           { message, clientTempId: payload.clientTempId },
         );
+
+        if (duplicate) return;
 
         const recipients = await prisma.conversationParticipant.findMany({
           where: {
