@@ -38,9 +38,19 @@ export function Composer({
   const [text, setText] = useState("");
   const [uploading, setUploading] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [recordElapsedMs, setRecordElapsedMs] = useState(0);
+  const [pendingVoice, setPendingVoice] = useState<{
+    file: File;
+    durationMs: number;
+    url: string;
+  } | null>(null);
+  const [previewMs, setPreviewMs] = useState(0);
+  const [playingPreview, setPlayingPreview] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const previewAudioRef = useRef<HTMLAudioElement>(null);
+  const pendingUrlRef = useRef<string | null>(null);
   const typingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const capture = useRef(new VoiceCapture());
   const onFileRef = useRef<(file: File) => Promise<void>>(async () => undefined);
@@ -57,6 +67,7 @@ export function Composer({
     uploading: false,
     editing: false,
     recording: false,
+    pendingVoice: false,
   });
 
   useEffect(() => {
@@ -88,8 +99,24 @@ export function Composer({
 
   useEffect(() => {
     const session = capture.current;
-    return () => session.abort();
+    return () => {
+      session.abort();
+      revokePendingUrl();
+    };
   }, []);
+
+  useEffect(() => {
+    if (!recording) {
+      setRecordElapsedMs(0);
+      return;
+    }
+    const startedAt = Date.now();
+    setRecordElapsedMs(0);
+    const id = window.setInterval(() => {
+      setRecordElapsedMs(Date.now() - startedAt);
+    }, 200);
+    return () => window.clearInterval(id);
+  }, [recording]);
 
   useEffect(() => {
     if (!recording) return;
@@ -99,6 +126,14 @@ export function Composer({
       return true;
     });
   }, [recording]);
+
+  useEffect(() => {
+    if (!pendingVoice) return;
+    return registerBackHandler(() => {
+      discardPendingVoice();
+      return true;
+    });
+  }, [pendingVoice]);
 
   useEffect(() => {
     if (!editing && !replyTo) return;
@@ -117,6 +152,7 @@ export function Composer({
         guard.uploading ||
         guard.editing ||
         guard.recording ||
+        guard.pendingVoice ||
         sendingFileRef.current ||
         Date.now() < ignorePasteUntil.current
       ) {
@@ -154,7 +190,36 @@ export function Composer({
     uploading,
     editing: Boolean(editing),
     recording,
+    pendingVoice: Boolean(pendingVoice),
   };
+
+  function revokePendingUrl() {
+    if (!pendingUrlRef.current) return;
+    URL.revokeObjectURL(pendingUrlRef.current);
+    pendingUrlRef.current = null;
+  }
+
+  function discardPendingVoice() {
+    const el = previewAudioRef.current;
+    if (el) {
+      el.pause();
+      el.removeAttribute("src");
+      el.load();
+    }
+    revokePendingUrl();
+    setPendingVoice(null);
+    setPreviewMs(0);
+    setPlayingPreview(false);
+  }
+
+  function keepPendingVoice(file: File, durationMs: number) {
+    revokePendingUrl();
+    const url = URL.createObjectURL(file);
+    pendingUrlRef.current = url;
+    setPreviewMs(0);
+    setPlayingPreview(false);
+    setPendingVoice({ file, durationMs, url });
+  }
 
   function handleChange(value: string) {
     setText(value);
@@ -184,7 +249,7 @@ export function Composer({
   }
 
   async function onFile(file: File) {
-    if (disabled || uploading || editing || recording || sendingFileRef.current) return;
+    if (disabled || uploading || editing || recording || pendingVoice || sendingFileRef.current) return;
     if (isRecentDuplicateFile(file, lastFileRef.current)) return;
     sendingFileRef.current = true;
     setError(null);
@@ -214,14 +279,14 @@ export function Composer({
   onFileRef.current = onFile;
 
   function armMic() {
-    if (recording || uploading || disabled) return;
+    if (recording || uploading || disabled || pendingVoice) return;
     void capture.current.arm().catch(() => undefined);
   }
 
   async function toggleRecording() {
+    if (pendingVoice || uploading || disabled) return;
     if (recording) {
       setRecording(false);
-      setUploading(true);
       setError(null);
       try {
         const result = await capture.current.stop();
@@ -229,13 +294,7 @@ export function Composer({
           setError("Áudio muito curto");
           return;
         }
-        const data = await uploadMedia(result.file);
-        onSend({
-          type: "audio",
-          mediaUrl: data.url,
-          durationMs: result.durationMs,
-          replyToId: replyTo?.id,
-        });
+        keepPendingVoice(result.file, result.durationMs);
       } catch (err) {
         capture.current.abort();
         setError(
@@ -245,8 +304,6 @@ export function Composer({
               ? err.message
               : "Áudio falhou",
         );
-      } finally {
-        setUploading(false);
       }
       return;
     }
@@ -258,6 +315,50 @@ export function Composer({
     } catch {
       capture.current.abort();
       setError("Permissão de microfone negada");
+    }
+  }
+
+  function togglePreviewPlayback() {
+    const el = previewAudioRef.current;
+    if (!el) return;
+    if (el.paused) {
+      void el.play().catch(() => setError("Não foi possível reproduzir o áudio"));
+      return;
+    }
+    el.pause();
+  }
+
+  function seekPreview(event: { currentTarget: HTMLElement; clientX: number }) {
+    const el = previewAudioRef.current;
+    if (!el || !pendingVoice) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+    el.currentTime = (pendingVoice.durationMs / 1000) * ratio;
+    setPreviewMs(pendingVoice.durationMs * ratio);
+  }
+
+  async function sendPendingVoice() {
+    if (!pendingVoice || disabled || uploading) return;
+    const voice = pendingVoice;
+    const el = previewAudioRef.current;
+    if (el) el.pause();
+    setPlayingPreview(false);
+    setUploading(true);
+    setError(null);
+    try {
+      const data = await uploadMedia(voice.file);
+      onSend({
+        type: "audio",
+        mediaUrl: data.url,
+        durationMs: voice.durationMs,
+        replyToId: replyTo?.id,
+      });
+      discardPendingVoice();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Áudio falhou");
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -292,7 +393,14 @@ export function Composer({
         </div>
       ) : null}
       {recording ? (
-        <div className="px-3 pt-2 text-xs text-red-300">Gravando…</div>
+        <div className="px-3 pt-2 text-xs text-red-300">
+          Gravando… {formatVoiceDuration(recordElapsedMs)}
+        </div>
+      ) : null}
+      {pendingVoice ? (
+        <div className="px-3 pt-2 text-xs text-ebano-muted">
+          Ouça o áudio antes de enviar, ou exclua para gravar de novo
+        </div>
       ) : null}
       {error ? (
         <div className="flex items-center justify-between gap-3 px-3 pt-2 text-xs text-red-300">
@@ -302,72 +410,155 @@ export function Composer({
           </button>
         </div>
       ) : null}
-      <form onSubmit={submit} className="flex items-end gap-2 px-3 py-3">
-        <input
-          ref={fileRef}
-          type="file"
-          className="hidden"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            e.target.value = "";
-            if (!file) return;
-            ignorePasteUntil.current = Date.now() + 8000;
-            void onFile(file);
-          }}
-        />
-        <button
-          type="button"
-          disabled={disabled || uploading || Boolean(editing)}
-          onClick={() => fileRef.current?.click()}
-          className="flex h-[42px] w-[42px] items-center justify-center rounded-xl text-ebano-accent hover:bg-ebano-surface disabled:opacity-50"
-          title="Anexar"
-          aria-label="Anexar arquivo"
-        >
-          <PaperclipIcon />
-        </button>
-        <textarea
-          ref={textareaRef}
-          rows={1}
-          value={text}
-          disabled={disabled || uploading}
-          onChange={(e) => handleChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              submit(e);
-            }
-          }}
-          placeholder={editing ? "Editar mensagem" : "Mensagem"}
-          title="Cole uma imagem com Ctrl+V"
-          className="max-h-32 min-h-[42px] flex-1 resize-none rounded-xl border border-white/10 bg-ebano-surface px-3 py-2.5 text-[15px] outline-none focus:border-ebano-accent"
-        />
-        {!editing ? (
+      {pendingVoice ? (
+        <div className="relative flex items-end gap-2 px-3 py-3">
+          <audio
+            ref={previewAudioRef}
+            src={pendingVoice.url}
+            preload="metadata"
+            playsInline
+            className="sr-only"
+            onTimeUpdate={(e) => setPreviewMs(e.currentTarget.currentTime * 1000)}
+            onPlay={() => setPlayingPreview(true)}
+            onPause={() => setPlayingPreview(false)}
+            onEnded={(e) => {
+              e.currentTarget.currentTime = 0;
+              setPlayingPreview(false);
+              setPreviewMs(0);
+            }}
+          />
+          <button
+            type="button"
+            disabled={uploading}
+            onClick={discardPendingVoice}
+            className="flex h-[42px] w-[42px] items-center justify-center rounded-xl text-red-300 hover:bg-red-500/15 disabled:opacity-50"
+            title="Excluir áudio"
+            aria-label="Excluir áudio e gravar de novo"
+          >
+            <TrashIcon />
+          </button>
+          <button
+            type="button"
+            disabled={uploading}
+            onClick={togglePreviewPlayback}
+            className="flex h-[42px] w-[42px] items-center justify-center rounded-xl bg-ebano-surface text-ebano-accent hover:bg-white/10 disabled:opacity-50"
+            title={playingPreview ? "Pausar" : "Ouvir áudio"}
+            aria-label={playingPreview ? "Pausar áudio" : "Ouvir áudio"}
+          >
+            {playingPreview ? <PauseIcon /> : <PlayIcon />}
+          </button>
+          <div className="flex min-h-[42px] min-w-0 flex-1 items-center gap-2 rounded-xl border border-white/10 bg-ebano-surface px-3 py-2.5">
+            <span className="shrink-0 tabular-nums text-sm">
+              {formatVoiceDuration(previewMs)}
+            </span>
+            <button
+              type="button"
+              disabled={uploading}
+              onClick={(e) => seekPreview(e)}
+              className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-white/10 disabled:opacity-50"
+              title="Posição do áudio"
+              aria-label="Posição do áudio"
+            >
+              <span
+                className="block h-full rounded-full bg-ebano-accent"
+                style={{
+                  width: `${previewProgress(previewMs, pendingVoice.durationMs)}%`,
+                }}
+              />
+            </button>
+            <span className="shrink-0 tabular-nums text-xs text-ebano-muted">
+              {formatVoiceDuration(pendingVoice.durationMs)}
+            </span>
+          </div>
           <button
             type="button"
             disabled={disabled || uploading}
-            onPointerDown={() => armMic()}
-            onClick={() => void toggleRecording()}
-            className={`flex h-[42px] w-[42px] items-center justify-center rounded-xl ${
-              recording
-                ? "bg-red-500/20 text-red-300"
-                : "text-ebano-accent hover:bg-ebano-surface"
-            }`}
-            title={recording ? "Parar gravação" : "Áudio"}
-            aria-label={recording ? "Parar gravação" : "Gravar áudio"}
+            onClick={() => void sendPendingVoice()}
+            className="rounded-xl bg-ebano-accent px-4 py-2.5 font-medium text-ebano-bg disabled:opacity-50"
           >
-            {recording ? <StopIcon /> : <MicIcon />}
+            {uploading ? "Enviando…" : "Enviar"}
           </button>
-        ) : null}
-        <button
-          type="submit"
-          disabled={disabled || uploading || !text.trim()}
-          className="rounded-xl bg-ebano-accent px-4 py-2.5 font-medium text-ebano-bg disabled:opacity-50"
-        >
-          {editing ? "Salvar" : "Enviar"}
-        </button>
-      </form>
+        </div>
+      ) : (
+        <form onSubmit={submit} className="flex items-end gap-2 px-3 py-3">
+          <input
+            ref={fileRef}
+            type="file"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (!file) return;
+              ignorePasteUntil.current = Date.now() + 8000;
+              void onFile(file);
+            }}
+          />
+          <button
+            type="button"
+            disabled={disabled || uploading || Boolean(editing)}
+            onClick={() => fileRef.current?.click()}
+            className="flex h-[42px] w-[42px] items-center justify-center rounded-xl text-ebano-accent hover:bg-ebano-surface disabled:opacity-50"
+            title="Anexar"
+            aria-label="Anexar arquivo"
+          >
+            <PaperclipIcon />
+          </button>
+          <textarea
+            ref={textareaRef}
+            rows={1}
+            value={text}
+            disabled={disabled || uploading || recording}
+            onChange={(e) => handleChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                submit(e);
+              }
+            }}
+            placeholder={editing ? "Editar mensagem" : "Mensagem"}
+            title="Cole uma imagem com Ctrl+V"
+            className="max-h-32 min-h-[42px] flex-1 resize-none rounded-xl border border-white/10 bg-ebano-surface px-3 py-2.5 text-[15px] outline-none focus:border-ebano-accent"
+          />
+          {!editing ? (
+            <button
+              type="button"
+              disabled={disabled || uploading}
+              onPointerDown={() => armMic()}
+              onClick={() => void toggleRecording()}
+              className={`flex h-[42px] w-[42px] items-center justify-center rounded-xl ${
+                recording
+                  ? "bg-red-500/20 text-red-300"
+                  : "text-ebano-accent hover:bg-ebano-surface"
+              }`}
+              title={recording ? "Parar gravação" : "Áudio"}
+              aria-label={recording ? "Parar gravação" : "Gravar áudio"}
+            >
+              {recording ? <StopIcon /> : <MicIcon />}
+            </button>
+          ) : null}
+          <button
+            type="submit"
+            disabled={disabled || uploading || recording || !text.trim()}
+            className="rounded-xl bg-ebano-accent px-4 py-2.5 font-medium text-ebano-bg disabled:opacity-50"
+          >
+            {editing ? "Salvar" : "Enviar"}
+          </button>
+        </form>
+      )}
     </div>
   );
+}
+
+function formatVoiceDuration(ms: number) {
+  const total = Math.max(0, Math.round(ms / 1000));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function previewProgress(currentMs: number, durationMs: number) {
+  if (durationMs <= 0) return 0;
+  return Math.min(100, Math.max(0, (currentMs / durationMs) * 100));
 }
 
 function isRecentDuplicateFile(
@@ -457,6 +648,37 @@ function StopIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
       <rect x="6" y="6" width="12" height="12" rx="2" />
+    </svg>
+  );
+}
+
+function PlayIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <path d="M8 5.5v13l11-6.5-11-6.5Z" />
+    </svg>
+  );
+}
+
+function PauseIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <rect x="6" y="5" width="4" height="14" rx="1" />
+      <rect x="14" y="5" width="4" height="14" rx="1" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M4 7h16M9 7V5h6v2M7 7l1 13h8l1-13"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
