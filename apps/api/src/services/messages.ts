@@ -3,6 +3,7 @@ import { assertParticipant, isBlockedEither } from "./conversations.js";
 import { toMessage } from "../lib/serialize.js";
 import {
   encodeCallMessage,
+  MAX_MESSAGE_CONTENT,
   type CallMessageEvent,
   type MessageType,
 } from "@ebano/shared";
@@ -15,7 +16,6 @@ async function loadMessage(messageId: string) {
   });
 }
 
-const MAX_CONTENT = 4000;
 const MAX_EMOJI = 16;
 const MAX_FORWARD = 20;
 const MAX_TEMP_ID = 80;
@@ -118,7 +118,7 @@ async function persistMessage(input: {
       statusCode: 400,
     });
   }
-  if (input.content && input.content.length > MAX_CONTENT) {
+  if (input.content && input.content.length > MAX_MESSAGE_CONTENT) {
     throw Object.assign(new Error("Mensagem muito longa"), { statusCode: 400 });
   }
   if (
@@ -191,7 +191,7 @@ export async function editMessage(
   if (Date.now() - existing.createdAt.getTime() > 1000 * 60 * 15) {
     throw Object.assign(new Error("Tempo de edição esgotado"), { statusCode: 400 });
   }
-  if (!content.trim() || content.length > MAX_CONTENT) {
+  if (!content.trim() || content.length > MAX_MESSAGE_CONTENT) {
     throw Object.assign(new Error("Conteúdo inválido"), { statusCode: 400 });
   }
 

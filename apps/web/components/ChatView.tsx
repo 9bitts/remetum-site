@@ -35,6 +35,7 @@ export function ChatView({
   onReact,
   onEdit,
   onDelete,
+  failedMessageIds,
   onForward,
   onCancelReply,
   onCancelEdit,
@@ -71,6 +72,7 @@ export function ChatView({
   onReact: (messageId: string, emoji: string) => void;
   onEdit: (message: Message) => void;
   onDelete: (messageId: string) => void;
+  failedMessageIds?: Set<string>;
   onForward: (message: Message) => void;
   onCancelReply: () => void;
   onCancelEdit: () => void;
@@ -455,6 +457,7 @@ export function ChatView({
               onReact={onReact}
               onEdit={onEdit}
               onDelete={onDelete}
+              sendFailed={failedMessageIds?.has(message.id)}
               onForward={onForward}
               onJumpTo={jumpToMessage}
             />

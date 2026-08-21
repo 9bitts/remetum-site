@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   SOCKET_EVENTS,
+  MAX_MESSAGE_CONTENT,
   type CallAcceptedEvent,
   type CallEndedEvent,
   type CallOfferEvent,
@@ -50,6 +51,7 @@ import {
 import {
   dequeueOutbox,
   enqueueOutbox,
+  isTempMessageId,
   outboxForConversation,
   readOutbox,
   type OutboxItem,
@@ -143,6 +145,7 @@ export function ChatShell() {
   const startingCallRef = useRef(false);
   const inFlightTempIds = useRef(new Set<string>());
   const flushOutboxRef = useRef<() => void>(() => undefined);
+  const failedTempIdsRef = useRef(new Set<string>());
 
   function ackOutbox(clientTempId?: string) {
     if (!clientTempId) return;
@@ -150,11 +153,34 @@ export function ChatShell() {
     dequeueOutbox(clientTempId);
   }
 
+  function discardLocalMessage(messageId: string) {
+    ackOutbox(messageId);
+    setFailedTempIds((prev) => {
+      if (!prev.has(messageId)) return prev;
+      const next = new Set(prev);
+      next.delete(messageId);
+      return next;
+    });
+    setMessages((prev) => prev.filter((m) => m.id !== messageId));
+  }
+
+  function markSendFailed(clientTempId: string) {
+    setFailedTempIds((prev) => {
+      if (prev.has(clientTempId)) return prev;
+      return new Set(prev).add(clientTempId);
+    });
+  }
+
   function flushOutbox() {
     const socket = getSocket();
     if (!socket.connected) return;
     for (const item of readOutbox()) {
       if (inFlightTempIds.current.has(item.clientTempId)) continue;
+      if (failedTempIdsRef.current.has(item.clientTempId)) continue;
+      if ((item.content?.length ?? 0) > MAX_MESSAGE_CONTENT) {
+        markSendFailed(item.clientTempId);
+        continue;
+      }
       inFlightTempIds.current.add(item.clientTempId);
       socket.emit(SOCKET_EVENTS.MESSAGE_SEND, {
         conversationId: item.conversationId,
@@ -168,6 +194,28 @@ export function ChatShell() {
     }
   }
   flushOutboxRef.current = flushOutbox;
+
+  useEffect(() => {
+    failedTempIdsRef.current = failedTempIds;
+  }, [failedTempIds]);
+
+  useEffect(() => {
+    const oversized = readOutbox()
+      .filter((item) => (item.content?.length ?? 0) > MAX_MESSAGE_CONTENT)
+      .map((item) => item.clientTempId);
+    if (oversized.length === 0) return;
+    setFailedTempIds((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const id of oversized) {
+        if (!next.has(id)) {
+          next.add(id);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, []);
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
@@ -760,7 +808,13 @@ export function ChatShell() {
       }
       if (payload.event === SOCKET_EVENTS.MESSAGE_SEND && payload.clientTempId) {
         inFlightTempIds.current.delete(payload.clientTempId);
-        setFailedTempIds((prev) => new Set(prev).add(payload.clientTempId!));
+        if (
+          /muito longa|vazia|inválid|bloqueado|Sem permissão|Arquivo obrigatório/i.test(
+            payload.message ?? "",
+          )
+        ) {
+          markSendFailed(payload.clientTempId);
+        }
       }
     };
 
@@ -854,6 +908,10 @@ export function ChatShell() {
     replyToId?: string;
   }) {
     if (!selectedId || !user) return;
+    if ((input.content?.length ?? 0) > MAX_MESSAGE_CONTENT) {
+      window.alert("Mensagem muito longa");
+      return;
+    }
 
     if (editing) {
       getSocket().emit(SOCKET_EVENTS.MESSAGE_EDIT, {
@@ -1140,22 +1198,6 @@ export function ChatShell() {
     }
   }
 
-  const displayMessages = useMemo(
-    () =>
-      messages.map((m) =>
-        failedTempIds.has(m.id)
-          ? {
-              ...m,
-              content:
-                m.type === "text"
-                  ? `${m.content ?? ""}\n(falha ao enviar)`.trim()
-                  : m.content,
-            }
-          : m,
-      ),
-    [messages, failedTempIds],
-  );
-
   if (loading || !user) {
     return (
       <main className="flex h-dvh items-center justify-center text-ebano-muted">
@@ -1308,7 +1350,7 @@ export function ChatShell() {
             key={selected.id}
             conversation={selected}
             currentUserId={user.id}
-            messages={displayMessages}
+            messages={messages}
             typingNames={typingNames}
             replyTo={replyTo}
             editing={editing}
@@ -1334,9 +1376,13 @@ export function ChatShell() {
               setEditing(message);
             }}
             onDelete={(messageId) => {
-              if (!window.confirm("Apagar esta mensagem para todos?")) return;
+              if (isTempMessageId(messageId) || failedTempIds.has(messageId)) {
+                discardLocalMessage(messageId);
+                return;
+              }
               getSocket().emit(SOCKET_EVENTS.MESSAGE_DELETE, { messageId });
             }}
+            failedMessageIds={failedTempIds}
             onForward={setForwarding}
             onCancelReply={() => setReplyTo(null)}
             onCancelEdit={() => setEditing(null)}

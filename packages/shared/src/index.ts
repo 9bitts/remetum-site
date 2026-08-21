@@ -137,6 +137,8 @@ export interface Message {
   reactions: MessageReactionSummary[];
 }
 
+export const MAX_MESSAGE_CONTENT = 4000;
+
 export interface MessageStatusRecord {
   messageId: string;
   userId: string;

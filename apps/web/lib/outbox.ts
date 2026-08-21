@@ -43,6 +43,10 @@ export function dequeueOutbox(clientTempId: string) {
   write(read().filter((row) => row.clientTempId !== clientTempId));
 }
 
+export function isTempMessageId(id: string) {
+  return id.startsWith("tmp_");
+}
+
 export function outboxForConversation(conversationId: string) {
   return read().filter((row) => row.conversationId === conversationId);
 }

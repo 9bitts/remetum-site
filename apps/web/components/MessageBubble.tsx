@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
 import type { Message } from "@ebano/shared";
 import { isValidHandle } from "@ebano/shared";
 import { formatCallMessage, parseCallMessage } from "@ebano/shared";
@@ -8,6 +15,7 @@ import { registerBackHandler } from "@/lib/back-stack";
 import { formatTime, messagePreview } from "@/lib/format";
 import { splitMessageLinks, hrefForLink } from "@/lib/links";
 import { fileLooksLikePdf, mediaSrc, openMediaFile } from "@/lib/media";
+import { isTempMessageId } from "@/lib/outbox";
 import { isShareableMedia, shareMediaFile } from "@/lib/share";
 import { MediaLightbox } from "./MediaLightbox";
 
@@ -30,6 +38,7 @@ function MentionText({ text }: { text: string }) {
 }
 
 const QUICK_REACTIONS = ["❤️", "👍", "😂", "😮", "😢", "🙏"];
+const LONG_PRESS_MS = 480;
 
 export function MessageBubble({
   message,
@@ -37,6 +46,7 @@ export function MessageBubble({
   senderNames,
   currentUserId,
   highlighted,
+  sendFailed,
   onReply,
   onReact,
   onEdit,
@@ -49,6 +59,7 @@ export function MessageBubble({
   senderNames?: Record<string, string>;
   currentUserId?: string;
   highlighted?: boolean;
+  sendFailed?: boolean;
   onReply: (message: Message) => void;
   onReact: (messageId: string, emoji: string) => void;
   onEdit: (message: Message) => void;
@@ -59,8 +70,15 @@ export function MessageBubble({
   const [preview, setPreview] = useState<"image" | "pdf" | null>(null);
   const [sharing, setSharing] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const pressRef = useRef({
+    timer: 0,
+    x: 0,
+    y: 0,
+    triggered: false,
+  });
   const src = message.mediaUrl ? mediaSrc(message.mediaUrl) : undefined;
   const canShareMedia = isShareableMedia(message.type) && Boolean(message.mediaUrl);
+  const unsent = isTempMessageId(message.id);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -72,14 +90,49 @@ export function MessageBubble({
 
   useEffect(() => {
     if (!menuOpen) return;
-    function onDocClick(e: Event) {
+    const openedAt = Date.now();
+    function onDocPointer(e: Event) {
+      if (Date.now() - openedAt < 450) return;
       const target = e.target as HTMLElement | null;
       if (target?.closest(`[data-msg-menu="${message.id}"]`)) return;
       setMenuOpen(false);
     }
-    document.addEventListener("pointerdown", onDocClick);
-    return () => document.removeEventListener("pointerdown", onDocClick);
+    document.addEventListener("pointerdown", onDocPointer);
+    return () => document.removeEventListener("pointerdown", onDocPointer);
   }, [menuOpen, message.id]);
+
+  function clearPress() {
+    if (pressRef.current.timer) {
+      window.clearTimeout(pressRef.current.timer);
+      pressRef.current.timer = 0;
+    }
+  }
+
+  function onPointerDown(e: ReactPointerEvent) {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("a, audio, video, input, textarea")) return;
+    clearPress();
+    pressRef.current.x = e.clientX;
+    pressRef.current.y = e.clientY;
+    pressRef.current.triggered = false;
+    pressRef.current.timer = window.setTimeout(() => {
+      pressRef.current.triggered = true;
+      navigator.vibrate?.(12);
+      setMenuOpen(true);
+    }, LONG_PRESS_MS);
+  }
+
+  function onPointerMove(e: ReactPointerEvent) {
+    if (!pressRef.current.timer) return;
+    const dx = e.clientX - pressRef.current.x;
+    const dy = e.clientY - pressRef.current.y;
+    if (dx * dx + dy * dy > 80) clearPress();
+  }
+
+  function endPress() {
+    clearPress();
+  }
 
   async function shareExternal() {
     if (!message.mediaUrl || sharing) return;
@@ -121,19 +174,56 @@ export function MessageBubble({
   return (
     <div
       id={`msg-${message.id}`}
-      className={`group/msg flex ${mine ? "justify-end" : "justify-start"}`}
+      data-msg-menu={message.id}
+      className={`group/msg flex max-md:select-none ${mine ? "justify-end" : "justify-start"}`}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={endPress}
+      onPointerCancel={endPress}
+      onClickCapture={(e) => {
+        if (!pressRef.current.triggered) return;
+        e.preventDefault();
+        e.stopPropagation();
+        pressRef.current.triggered = false;
+      }}
+      onContextMenu={(e) => {
+        const target = e.target as HTMLElement | null;
+        if (target?.closest("a, audio, video")) return;
+        e.preventDefault();
+        setMenuOpen(true);
+      }}
     >
       <div
         className={`flex max-w-[92%] items-start gap-1.5 ${
           mine ? "flex-row-reverse" : ""
         }`}
       >
-        <div className="relative min-w-0" data-msg-menu={message.id}>
+        <div className="relative min-w-0">
         <div
           className={`rounded-[var(--radius-ebano)] px-3 py-2 transition ${
             mine ? "bg-ebano-sent text-ebano-text" : "bg-ebano-surface text-ebano-text"
-          } ${highlighted ? "ring-2 ring-ebano-accent/60" : ""}`}
+          } ${highlighted ? "ring-2 ring-ebano-accent/60" : ""} ${
+            sendFailed ? "ring-1 ring-red-400/40" : ""
+          }`}
         >
+          {sendFailed ? (
+            <div className={`mb-2 flex items-center gap-2 ${mine ? "justify-end" : ""}`}>
+              <span className="text-[11px] font-medium text-red-300">
+                Não enviada
+              </span>
+              {mine ? (
+                <button
+                  type="button"
+                  onClick={() => onDelete(message.id)}
+                  className="inline-flex items-center gap-1 rounded-md bg-red-500/15 px-2 py-1 text-[11px] font-medium text-red-300 hover:bg-red-500/25"
+                >
+                  <TrashIcon />
+                  Descartar
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+
           {message.replyTo ? (
             <button
               type="button"
@@ -253,7 +343,7 @@ export function MessageBubble({
           >
             {message.editedAt ? <span>editada</span> : null}
             <span>{formatTime(message.createdAt)}</span>
-            {mine ? (
+            {mine && !unsent ? (
               <span
                 className={
                   message.status === "read" ? "text-ebano-accent" : undefined
@@ -266,7 +356,7 @@ export function MessageBubble({
             ) : null}
             <button
               type="button"
-              onClick={() => setMenuOpen((open) => !open)}
+              onClick={() => setMenuOpen(true)}
               className={`-mr-1.5 inline-flex h-7 w-7 items-center justify-center rounded-md hover:bg-black/25 ${
                 menuOpen ? "bg-black/25" : ""
               } ${
@@ -282,60 +372,6 @@ export function MessageBubble({
             </button>
           </div>
         </div>
-        {menuOpen ? (
-          <div
-            className={`absolute top-full z-30 mt-1 min-w-[188px] rounded-xl border border-white/10 bg-ebano-surface p-1 shadow-xl ${
-              mine ? "right-0" : "left-0"
-            }`}
-          >
-            <div className="mb-1 flex justify-between gap-0.5 px-1 py-1">
-              {QUICK_REACTIONS.map((emoji) => (
-                <button
-                  key={emoji}
-                  type="button"
-                  className="rounded-md px-1 py-0.5 text-base hover:bg-white/5"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onReact(message.id, emoji);
-                  }}
-                >
-                  {emoji}
-                </button>
-              ))}
-            </div>
-            {onForward ? (
-              <MessageMenuItem
-                onClick={() => {
-                  setMenuOpen(false);
-                  onForward(message);
-                }}
-              >
-                Encaminhar
-              </MessageMenuItem>
-            ) : null}
-            {mine && message.type === "text" ? (
-              <MessageMenuItem
-                onClick={() => {
-                  setMenuOpen(false);
-                  onEdit(message);
-                }}
-              >
-                Editar
-              </MessageMenuItem>
-            ) : null}
-            {mine ? (
-              <MessageMenuItem
-                danger
-                onClick={() => {
-                  setMenuOpen(false);
-                  onDelete(message.id);
-                }}
-              >
-                Apagar
-              </MessageMenuItem>
-            ) : null}
-          </div>
-        ) : null}
 
         {message.reactions.length > 0 ? (
           <div className={`mt-1 flex flex-wrap gap-1 ${mine ? "justify-end" : ""}`}>
@@ -386,42 +422,6 @@ export function MessageBubble({
             </button>
           </div>
         ) : null}
-
-        <div
-          className={`mt-1 hidden gap-1 text-[11px] group-hover/msg:flex ${
-            mine ? "justify-end" : "justify-start"
-          }`}
-        >
-          {onForward && !canShareMedia ? (
-            <button
-              type="button"
-              className="text-ebano-muted hover:text-ebano-accent"
-              onClick={() => onForward(message)}
-            >
-              Encaminhar
-            </button>
-          ) : null}
-          {QUICK_REACTIONS.map((emoji) => (
-            <button
-              key={emoji}
-              type="button"
-              className="hover:scale-110"
-              onClick={() => onReact(message.id, emoji)}
-            >
-              {emoji}
-            </button>
-          ))}
-          {mine && message.type === "text" ? (
-            <button type="button" className="text-ebano-muted hover:text-ebano-accent" onClick={() => onEdit(message)}>
-              Editar
-            </button>
-          ) : null}
-          {mine ? (
-            <button type="button" className="text-red-300/80 hover:text-red-300" onClick={() => onDelete(message.id)}>
-              Apagar
-            </button>
-          ) : null}
-        </div>
         </div>
         <button
           type="button"
@@ -433,6 +433,46 @@ export function MessageBubble({
           <ReplyArrowIcon />
         </button>
       </div>
+      {menuOpen
+        ? createPortal(
+            <MessageActionSheet
+              messageId={message.id}
+              mine={mine}
+              unsent={unsent}
+              canEdit={mine && message.type === "text" && !unsent}
+              onClose={() => setMenuOpen(false)}
+              onReact={(emoji) => {
+                setMenuOpen(false);
+                onReact(message.id, emoji);
+              }}
+              onForward={
+                onForward
+                  ? () => {
+                      setMenuOpen(false);
+                      onForward(message);
+                    }
+                  : undefined
+              }
+              onEdit={
+                mine && message.type === "text" && !unsent
+                  ? () => {
+                      setMenuOpen(false);
+                      onEdit(message);
+                    }
+                  : undefined
+              }
+              onDelete={
+                mine
+                  ? () => {
+                      setMenuOpen(false);
+                      onDelete(message.id);
+                    }
+                  : undefined
+              }
+            />,
+            document.body,
+          )
+        : null}
       {preview && src ? (
         <MediaLightbox
           src={src}
@@ -453,22 +493,85 @@ export function MessageBubble({
   );
 }
 
-function MessageMenuItem({
+function MessageActionSheet({
+  messageId,
+  mine,
+  unsent,
+  canEdit,
+  onClose,
+  onReact,
+  onForward,
+  onEdit,
+  onDelete,
+}: {
+  messageId: string;
+  mine: boolean;
+  unsent: boolean;
+  canEdit: boolean;
+  onClose: () => void;
+  onReact: (emoji: string) => void;
+  onForward?: () => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-[80] flex items-end justify-center sm:items-center"
+      data-msg-menu={messageId}
+    >
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/55"
+        aria-label="Fechar opções"
+        onClick={onClose}
+      />
+      <div className="relative z-10 mb-[max(0.75rem,env(safe-area-inset-bottom))] w-[min(100%-1.5rem,22rem)] rounded-2xl border border-white/10 bg-ebano-surface p-2 shadow-2xl">
+        {!unsent ? (
+          <div className="mb-1 flex justify-between gap-0.5 px-1 py-1">
+            {QUICK_REACTIONS.map((emoji) => (
+              <button
+                key={emoji}
+                type="button"
+                className="rounded-md px-1 py-1 text-xl hover:bg-white/5"
+                onClick={() => onReact(emoji)}
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {onForward ? (
+          <SheetItem onClick={onForward}>Encaminhar</SheetItem>
+        ) : null}
+        {canEdit && onEdit ? <SheetItem onClick={onEdit}>Editar</SheetItem> : null}
+        {mine && onDelete ? (
+          <button
+            type="button"
+            onClick={onDelete}
+            className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm text-red-300 hover:bg-white/5"
+          >
+            <TrashIcon />
+            {unsent ? "Descartar" : "Apagar"}
+          </button>
+        ) : null}
+        <SheetItem onClick={onClose}>Cancelar</SheetItem>
+      </div>
+    </div>
+  );
+}
+
+function SheetItem({
   children,
   onClick,
-  danger,
 }: {
   children: ReactNode;
   onClick: () => void;
-  danger?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`block w-full rounded-lg px-3 py-2.5 text-left text-sm hover:bg-white/5 ${
-        danger ? "text-red-300" : "text-ebano-text"
-      }`}
+      className="block w-full rounded-xl px-3 py-3 text-left text-sm text-ebano-text hover:bg-white/5"
     >
       {children}
     </button>
@@ -481,6 +584,20 @@ function DotsIcon() {
       <circle cx="12" cy="5" r="2" />
       <circle cx="12" cy="12" r="2" />
       <circle cx="12" cy="19" r="2" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M4 7h16M9 7V5h6v2M8 7l1 13h6l1-13"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }

@@ -3,6 +3,7 @@
 import type { FormEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import type { Message } from "@ebano/shared";
+import { MAX_MESSAGE_CONTENT } from "@ebano/shared";
 import { messagePreview } from "@/lib/format";
 import { uploadMedia } from "@/lib/upload";
 import { registerBackHandler } from "@/lib/back-stack";
@@ -232,6 +233,10 @@ export function Composer({
     event.preventDefault();
     const content = text.trim();
     if (!content || disabled) return;
+    if (content.length > MAX_MESSAGE_CONTENT) {
+      setError(`A mensagem pode ter no máximo ${MAX_MESSAGE_CONTENT} caracteres`);
+      return;
+    }
     onSend({
       content,
       type: "text",
@@ -517,6 +522,7 @@ export function Composer({
             }}
             placeholder={editing ? "Editar mensagem" : "Mensagem"}
             title="Cole uma imagem com Ctrl+V"
+            maxLength={MAX_MESSAGE_CONTENT}
             className="max-h-32 min-h-[42px] flex-1 resize-none rounded-xl border border-white/10 bg-ebano-surface px-3 py-2.5 text-[15px] outline-none focus:border-ebano-accent"
           />
           {!editing ? (
