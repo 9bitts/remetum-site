@@ -1333,9 +1333,10 @@ export function ChatShell() {
               setReplyTo(null);
               setEditing(message);
             }}
-            onDelete={(messageId) =>
-              getSocket().emit(SOCKET_EVENTS.MESSAGE_DELETE, { messageId })
-            }
+            onDelete={(messageId) => {
+              if (!window.confirm("Apagar esta mensagem para todos?")) return;
+              getSocket().emit(SOCKET_EVENTS.MESSAGE_DELETE, { messageId });
+            }}
             onForward={setForwarding}
             onCancelReply={() => setReplyTo(null)}
             onCancelEdit={() => setEditing(null)}

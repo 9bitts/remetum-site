@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { Message } from "@ebano/shared";
 import { isValidHandle } from "@ebano/shared";
 import { formatCallMessage, parseCallMessage } from "@ebano/shared";
+import { registerBackHandler } from "@/lib/back-stack";
 import { formatTime, messagePreview } from "@/lib/format";
 import { splitMessageLinks, hrefForLink } from "@/lib/links";
 import { fileLooksLikePdf, mediaSrc, openMediaFile } from "@/lib/media";
@@ -57,8 +58,28 @@ export function MessageBubble({
 }) {
   const [preview, setPreview] = useState<"image" | "pdf" | null>(null);
   const [sharing, setSharing] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const src = message.mediaUrl ? mediaSrc(message.mediaUrl) : undefined;
   const canShareMedia = isShareableMedia(message.type) && Boolean(message.mediaUrl);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    return registerBackHandler(() => {
+      setMenuOpen(false);
+      return true;
+    });
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onDocClick(e: Event) {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest(`[data-msg-menu="${message.id}"]`)) return;
+      setMenuOpen(false);
+    }
+    document.addEventListener("pointerdown", onDocClick);
+    return () => document.removeEventListener("pointerdown", onDocClick);
+  }, [menuOpen, message.id]);
 
   async function shareExternal() {
     if (!message.mediaUrl || sharing) return;
@@ -107,7 +128,7 @@ export function MessageBubble({
           mine ? "flex-row-reverse" : ""
         }`}
       >
-        <div className="min-w-0">
+        <div className="relative min-w-0" data-msg-menu={message.id}>
         <div
           className={`rounded-[var(--radius-ebano)] px-3 py-2 transition ${
             mine ? "bg-ebano-sent text-ebano-text" : "bg-ebano-surface text-ebano-text"
@@ -243,8 +264,78 @@ export function MessageBubble({
                   : "✓"}
               </span>
             ) : null}
+            <button
+              type="button"
+              onClick={() => setMenuOpen((open) => !open)}
+              className={`-mr-1.5 inline-flex h-7 w-7 items-center justify-center rounded-md hover:bg-black/25 ${
+                menuOpen ? "bg-black/25" : ""
+              } ${
+                mine
+                  ? "text-white/70 hover:text-white"
+                  : "text-ebano-muted hover:text-ebano-text"
+              }`}
+              title="Opções da mensagem"
+              aria-label="Opções da mensagem"
+              aria-expanded={menuOpen}
+            >
+              <DotsIcon />
+            </button>
           </div>
         </div>
+        {menuOpen ? (
+          <div
+            className={`absolute top-full z-30 mt-1 min-w-[188px] rounded-xl border border-white/10 bg-ebano-surface p-1 shadow-xl ${
+              mine ? "right-0" : "left-0"
+            }`}
+          >
+            <div className="mb-1 flex justify-between gap-0.5 px-1 py-1">
+              {QUICK_REACTIONS.map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  className="rounded-md px-1 py-0.5 text-base hover:bg-white/5"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onReact(message.id, emoji);
+                  }}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+            {onForward ? (
+              <MessageMenuItem
+                onClick={() => {
+                  setMenuOpen(false);
+                  onForward(message);
+                }}
+              >
+                Encaminhar
+              </MessageMenuItem>
+            ) : null}
+            {mine && message.type === "text" ? (
+              <MessageMenuItem
+                onClick={() => {
+                  setMenuOpen(false);
+                  onEdit(message);
+                }}
+              >
+                Editar
+              </MessageMenuItem>
+            ) : null}
+            {mine ? (
+              <MessageMenuItem
+                danger
+                onClick={() => {
+                  setMenuOpen(false);
+                  onDelete(message.id);
+                }}
+              >
+                Apagar
+              </MessageMenuItem>
+            ) : null}
+          </div>
+        ) : null}
 
         {message.reactions.length > 0 ? (
           <div className={`mt-1 flex flex-wrap gap-1 ${mine ? "justify-end" : ""}`}>
@@ -359,6 +450,38 @@ export function MessageBubble({
         />
       ) : null}
     </div>
+  );
+}
+
+function MessageMenuItem({
+  children,
+  onClick,
+  danger,
+}: {
+  children: ReactNode;
+  onClick: () => void;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`block w-full rounded-lg px-3 py-2.5 text-left text-sm hover:bg-white/5 ${
+        danger ? "text-red-300" : "text-ebano-text"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function DotsIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <circle cx="12" cy="5" r="2" />
+      <circle cx="12" cy="12" r="2" />
+      <circle cx="12" cy="19" r="2" />
+    </svg>
   );
 }
 
