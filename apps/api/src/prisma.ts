@@ -32,6 +32,9 @@ const LOGIN_SCHEMA_SQL = [
   `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "email_verified_at" TIMESTAMP(3)`,
   `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "hide_last_seen" BOOLEAN NOT NULL DEFAULT false`,
   `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "send_read_receipts" BOOLEAN NOT NULL DEFAULT true`,
+  `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "notification_preview" TEXT NOT NULL DEFAULT 'full'`,
+  `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "notification_sound" BOOLEAN NOT NULL DEFAULT true`,
+  `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "dnd_enabled" BOOLEAN NOT NULL DEFAULT false`,
   `CREATE UNIQUE INDEX IF NOT EXISTS "users_handle_key" ON "users" ("handle")`,
   `CREATE TABLE IF NOT EXISTS "refresh_sessions" (
     "id" TEXT NOT NULL,
@@ -103,6 +106,9 @@ export async function findUserByEmail(email: string): Promise<User | null> {
       emailVerifiedAt: null,
       hideLastSeen: false,
       sendReadReceipts: true,
+      notificationPreview: "full",
+      notificationSound: true,
+      dndEnabled: false,
       createdAt: row.created_at,
     };
   }

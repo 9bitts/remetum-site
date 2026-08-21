@@ -357,7 +357,7 @@ export function ChatView({
                         onClick={() => {
                           setMuteOpen(false);
                           setMenuOpen(false);
-                          onMute(365 * 24 * 60);
+                          onMute(0);
                         }}
                       >
                         Para sempre

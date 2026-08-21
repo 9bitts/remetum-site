@@ -3,6 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import type { AuthSession, AuthUser, PublicUser } from "@ebano/shared";
 import { api } from "@/lib/api";
+import {
+  disablePush,
+  enablePush,
+  hasPushSubscription,
+  notificationPermission,
+  pushConfigured,
+} from "@/lib/push";
 import { uploadMedia } from "@/lib/upload";
 import { profileUrl } from "@/lib/links";
 import { Avatar } from "./Avatar";
@@ -26,6 +33,16 @@ export function SettingsModal({
   const [avatarUrl, setAvatarUrl] = useState<string | null>(user.avatarUrl);
   const [hideLastSeen, setHideLastSeen] = useState(user.hideLastSeen);
   const [sendReadReceipts, setSendReadReceipts] = useState(user.sendReadReceipts);
+  const [notificationPreview, setNotificationPreview] = useState(
+    user.notificationPreview ?? "full",
+  );
+  const [notificationSound, setNotificationSound] = useState(
+    user.notificationSound !== false,
+  );
+  const [dndEnabled, setDndEnabled] = useState(Boolean(user.dndEnabled));
+  const [pushStatus, setPushStatus] = useState<
+    "loading" | "unsupported" | "denied" | "off" | "on"
+  >("loading");
   const [blocked, setBlocked] = useState<PublicUser[]>([]);
   const [sessions, setSessions] = useState<AuthSession[]>([]);
   const [currentPassword, setCurrentPassword] = useState("");
@@ -45,6 +62,9 @@ export function SettingsModal({
     setAvatarUrl(user.avatarUrl);
     setHideLastSeen(user.hideLastSeen);
     setSendReadReceipts(user.sendReadReceipts);
+    setNotificationPreview(user.notificationPreview);
+    setNotificationSound(user.notificationSound);
+    setDndEnabled(user.dndEnabled);
     setError(null);
     void api<{ users: PublicUser[] }>("/users/blocked")
       .then((res) => setBlocked(res.users))
@@ -52,6 +72,7 @@ export function SettingsModal({
     void api<{ sessions: AuthSession[] }>("/auth/sessions")
       .then((res) => setSessions(res.sessions))
       .catch(() => setSessions([]));
+    void refreshPushStatus();
   }, [
     open,
     user.name,
@@ -60,6 +81,9 @@ export function SettingsModal({
     user.avatarUrl,
     user.hideLastSeen,
     user.sendReadReceipts,
+    user.notificationPreview,
+    user.notificationSound,
+    user.dndEnabled,
   ]);
 
   if (!open) return null;
@@ -133,6 +157,73 @@ export function SettingsModal({
       setError(err instanceof Error ? err.message : "Falha ao salvar");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function refreshPushStatus() {
+    const permission = notificationPermission();
+    if (permission === "unsupported") {
+      setPushStatus("unsupported");
+      return;
+    }
+    const configured = await pushConfigured();
+    if (!configured) {
+      setPushStatus("unsupported");
+      return;
+    }
+    if (permission === "denied") {
+      setPushStatus("denied");
+      return;
+    }
+    if (permission !== "granted") {
+      setPushStatus("off");
+      return;
+    }
+    const sub = await hasPushSubscription();
+    setPushStatus(sub ? "on" : "off");
+  }
+
+  async function togglePush() {
+    setError(null);
+    try {
+      if (pushStatus === "on") {
+        await disablePush();
+      } else {
+        const result = await enablePush();
+        if (result === "denied") {
+          setPushStatus("denied");
+          return;
+        }
+      }
+      await refreshPushStatus();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha nas notificações");
+    }
+  }
+
+  async function saveNotifyPrefs(patch: {
+    notificationPreview?: AuthUser["notificationPreview"];
+    notificationSound?: boolean;
+    dndEnabled?: boolean;
+  }) {
+    setError(null);
+    try {
+      const res = await api<{ user: AuthUser }>("/users/me", {
+        method: "PATCH",
+        body: patch,
+      });
+      onUserUpdated(res.user);
+      if (patch.notificationPreview) {
+        setNotificationPreview(res.user.notificationPreview);
+      }
+      if (patch.notificationSound !== undefined) {
+        setNotificationSound(res.user.notificationSound);
+      }
+      if (patch.dndEnabled !== undefined) {
+        setDndEnabled(res.user.dndEnabled);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao salvar");
     }
   }
 
@@ -327,6 +418,72 @@ export function SettingsModal({
             onChange={(e) => setSendReadReceipts(e.target.checked)}
           />
         </label>
+
+        <h3 className="mb-2 text-sm font-medium text-ebano-accent">
+          Notificações
+        </h3>
+        <div className="mb-6 space-y-3">
+          {pushStatus === "denied" ? (
+            <p className="text-xs text-ebano-muted">
+              O navegador bloqueou. Ative as notificações nas configurações do
+              aparelho ou do site e volte aqui.
+            </p>
+          ) : pushStatus === "unsupported" ? (
+            <p className="text-xs text-ebano-muted">
+              Este aparelho ou servidor não envia notificações push.
+            </p>
+          ) : (
+            <label className="flex items-center justify-between gap-3 text-sm">
+              <span>Alertas neste aparelho</span>
+              <input
+                type="checkbox"
+                checked={pushStatus === "on"}
+                disabled={pushStatus === "loading"}
+                onChange={() => void togglePush()}
+              />
+            </label>
+          )}
+          <label className="flex items-center justify-between gap-3 text-sm">
+            <span>Som no app</span>
+            <input
+              type="checkbox"
+              checked={notificationSound}
+              onChange={(e) => {
+                const next = e.target.checked;
+                setNotificationSound(next);
+                void saveNotifyPrefs({ notificationSound: next });
+              }}
+            />
+          </label>
+          <label className="flex items-center justify-between gap-3 text-sm">
+            <span>Não perturbe</span>
+            <input
+              type="checkbox"
+              checked={dndEnabled}
+              onChange={(e) => {
+                const next = e.target.checked;
+                setDndEnabled(next);
+                void saveNotifyPrefs({ dndEnabled: next });
+              }}
+            />
+          </label>
+          <div>
+            <p className="mb-1 text-xs text-ebano-muted">Na tela de bloqueio</p>
+            <select
+              value={notificationPreview}
+              onChange={(e) => {
+                const next = e.target.value as AuthUser["notificationPreview"];
+                setNotificationPreview(next);
+                void saveNotifyPrefs({ notificationPreview: next });
+              }}
+              className="w-full rounded-xl border border-white/10 bg-ebano-bg px-3 py-2 text-sm outline-none focus:border-ebano-accent"
+            >
+              <option value="full">Nome e texto</option>
+              <option value="name">Só o nome</option>
+              <option value="hidden">Só um aviso</option>
+            </select>
+          </div>
+        </div>
 
         <button
           type="button"

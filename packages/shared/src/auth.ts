@@ -10,6 +10,9 @@ export interface AuthUser {
   emailVerifiedAt: string | null;
   hideLastSeen: boolean;
   sendReadReceipts: boolean;
+  notificationPreview: "full" | "name" | "hidden";
+  notificationSound: boolean;
+  dndEnabled: boolean;
   createdAt: string;
 }
 

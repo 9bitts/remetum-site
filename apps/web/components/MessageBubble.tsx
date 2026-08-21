@@ -2,12 +2,31 @@
 
 import { useState } from "react";
 import type { Message } from "@ebano/shared";
+import { isValidHandle } from "@ebano/shared";
 import { formatCallMessage, parseCallMessage } from "@ebano/shared";
 import { formatTime, messagePreview } from "@/lib/format";
 import { splitMessageLinks, hrefForLink } from "@/lib/links";
 import { fileLooksLikePdf, mediaSrc, openMediaFile } from "@/lib/media";
 import { isShareableMedia, shareMediaFile } from "@/lib/share";
 import { MediaLightbox } from "./MediaLightbox";
+
+function MentionText({ text }: { text: string }) {
+  const parts = text.split(/(@[a-z0-9_]{3,24})/gi);
+  return (
+    <>
+      {parts.map((part, i) => {
+        if (part.startsWith("@") && isValidHandle(part.slice(1).toLowerCase())) {
+          return (
+            <span key={i} className="text-ebano-accent">
+              {part}
+            </span>
+          );
+        }
+        return <span key={i}>{part}</span>;
+      })}
+    </>
+  );
+}
 
 const QUICK_REACTIONS = ["❤️", "👍", "😂", "😮", "😢", "🙏"];
 
@@ -200,7 +219,7 @@ export function MessageBubble({
                     {part.value}
                   </a>
                 ) : (
-                  <span key={i}>{part.value}</span>
+                  <MentionText key={i} text={part.value} />
                 ),
               )}
             </p>

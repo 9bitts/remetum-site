@@ -32,7 +32,8 @@ import {
   trackSocket,
   untrackSocket,
 } from "../services/presence.js";
-import { notifyCallEnded, notifyIncomingCall, notifyUsers } from "../services/push.js";
+import { notifyCallEnded, notifyIncomingCall } from "../services/push.js";
+import { notifyNewMessage, notifyReaction } from "../services/notify.js";
 import { assertParticipant, isBlockedEither } from "../services/conversations.js";
 import {
   callDurationMs,
@@ -225,34 +226,18 @@ export async function createSocketServer(
 
         if (duplicate) return;
 
-        const recipients = await prisma.conversationParticipant.findMany({
-          where: {
-            conversationId: payload.conversationId,
-            userId: { not: userId },
-            OR: [{ mutedUntil: null }, { mutedUntil: { lt: new Date() } }],
-          },
-          select: { userId: true },
+        const sender = await prisma.user.findUnique({
+          where: { id: userId },
+          select: { name: true },
         });
-
-        const preview =
-          payload.type === "text"
-            ? (payload.content ?? "").slice(0, 120)
-            : payload.type === "image"
-              ? "📷 Imagem"
-              : payload.type === "audio"
-                ? "🎤 Áudio"
-                : payload.type === "video"
-                  ? "🎬 Vídeo"
-                  : "📎 Arquivo";
-
-        await notifyUsers(
-          recipients.map((r) => r.userId),
-          {
-            title: "Remetum",
-            body: preview || "Nova mensagem",
-            url: `/app?c=${payload.conversationId}`,
-          },
-        );
+        await notifyNewMessage({
+          conversationId: payload.conversationId,
+          senderId: userId,
+          senderName: sender?.name ?? "Alguém",
+          type: payload.type,
+          content: payload.content ?? null,
+          replyToSenderId: message.replyTo?.senderId ?? null,
+        });
       } catch (err) {
         socket.emit(SOCKET_EVENTS.ERROR, {
           event: SOCKET_EVENTS.MESSAGE_SEND,
@@ -304,7 +289,7 @@ export async function createSocketServer(
 
     socket.on(SOCKET_EVENTS.MESSAGE_REACT, async (payload: MessageReactPayload) => {
       try {
-        const message = await toggleReaction(
+        const { message, added } = await toggleReaction(
           payload.messageId,
           userId,
           payload.emoji,
@@ -313,6 +298,20 @@ export async function createSocketServer(
           SOCKET_EVENTS.MESSAGE_UPDATED,
           { message },
         );
+        if (added) {
+          const actor = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { name: true },
+          });
+          await notifyReaction({
+            conversationId: message.conversationId,
+            messageId: message.id,
+            authorId: message.senderId,
+            actorId: userId,
+            actorName: actor?.name ?? "Alguém",
+            emoji: payload.emoji,
+          });
+        }
       } catch (err) {
         socket.emit(SOCKET_EVENTS.ERROR, {
           event: SOCKET_EVENTS.MESSAGE_REACT,

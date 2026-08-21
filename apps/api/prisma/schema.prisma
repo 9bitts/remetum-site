@@ -48,9 +48,12 @@ model User {
   status           UserStatus @default(offline)
   lastSeenAt       DateTime?  @map("last_seen_at")
   emailVerifiedAt  DateTime?  @map("email_verified_at")
-  hideLastSeen     Boolean    @default(false) @map("hide_last_seen")
-  sendReadReceipts Boolean    @default(true) @map("send_read_receipts")
-  createdAt        DateTime   @default(now()) @map("created_at")
+  hideLastSeen          Boolean  @default(false) @map("hide_last_seen")
+  sendReadReceipts      Boolean  @default(true) @map("send_read_receipts")
+  notificationPreview   String   @default("full") @map("notification_preview")
+  notificationSound     Boolean  @default(true) @map("notification_sound")
+  dndEnabled            Boolean  @default(false) @map("dnd_enabled")
+  createdAt             DateTime @default(now()) @map("created_at")
 
   participants      ConversationParticipant[]
   messages          Message[]

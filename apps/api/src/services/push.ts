@@ -1,7 +1,6 @@
 import webpush from "web-push";
 import { prisma } from "../prisma.js";
 import { config, pushEnabled } from "../config.js";
-import { isUserOnline } from "./presence.js";
 
 if (pushEnabled()) {
   try {
@@ -25,9 +24,7 @@ export async function savePushSubscription(input: {
     where: { endpoint: input.endpoint },
   });
   if (existing && existing.userId !== input.userId) {
-    throw Object.assign(new Error("Subscription já vinculada a outra conta"), {
-      statusCode: 409,
-    });
+    await prisma.pushSubscription.delete({ where: { id: existing.id } });
   }
 
   return prisma.pushSubscription.upsert({
@@ -36,6 +33,7 @@ export async function savePushSubscription(input: {
     update: {
       p256dh: input.p256dh,
       auth: input.auth,
+      userId: input.userId,
     },
   });
 }
@@ -48,7 +46,7 @@ export type PushPayload = {
   title: string;
   body: string;
   url?: string;
-  type?: "message" | "call" | "call-ended";
+  type?: "message" | "call" | "call-ended" | "reaction" | "status";
   callId?: string;
   tag?: string;
   requireInteraction?: boolean;
@@ -58,28 +56,20 @@ export type PushPayload = {
   conversationId?: string;
 };
 
-export async function notifyUsers(
-  userIds: string[],
-  payload: PushPayload,
-  options?: { evenIfOnline?: boolean },
+export async function sendPushToUsers(
+  items: Array<{ userId: string; payload: PushPayload }>,
 ) {
-  if (!pushEnabled() || userIds.length === 0) return;
+  if (!pushEnabled() || items.length === 0) return;
 
-  const targetIds = options?.evenIfOnline
-    ? userIds
-    : (
-        await Promise.all(
-          userIds.map(async (id) => ((await isUserOnline(id)) ? null : id)),
-        )
-      ).filter((id): id is string => Boolean(id));
-  if (targetIds.length === 0) return;
-
+  const payloadByUser = new Map(items.map((item) => [item.userId, item.payload]));
   const subs = await prisma.pushSubscription.findMany({
-    where: { userId: { in: targetIds } },
+    where: { userId: { in: [...payloadByUser.keys()] } },
   });
 
   await Promise.all(
     subs.map(async (sub) => {
+      const payload = payloadByUser.get(sub.userId);
+      if (!payload) return;
       try {
         await webpush.sendNotification(
           {
@@ -98,6 +88,11 @@ export async function notifyUsers(
   );
 }
 
+export async function notifyUsers(userIds: string[], payload: PushPayload) {
+  const unique = [...new Set(userIds)];
+  await sendPushToUsers(unique.map((userId) => ({ userId, payload })));
+}
+
 export async function notifyIncomingCall(
   userIds: string | string[],
   input: {
@@ -109,22 +104,18 @@ export async function notifyIncomingCall(
 ) {
   const ids = Array.isArray(userIds) ? userIds : [userIds];
   const kind = input.video ? "chamada de vídeo" : "chamada de voz";
-  await notifyUsers(
-    ids,
-    {
-      title: "Remetum",
-      body: `${input.fromName} está ligando (${kind})`,
-      url: `/app?c=${encodeURIComponent(input.conversationId)}&call=${encodeURIComponent(input.callId)}`,
-      type: "call",
-      callId: input.callId,
-      tag: `call-${input.callId}`,
-      requireInteraction: true,
-      video: input.video,
-      fromName: input.fromName,
-      conversationId: input.conversationId,
-    },
-    { evenIfOnline: true },
-  );
+  await notifyUsers(ids, {
+    title: input.fromName,
+    body: `Está ligando (${kind})`,
+    url: `/app?c=${encodeURIComponent(input.conversationId)}&call=${encodeURIComponent(input.callId)}`,
+    type: "call",
+    callId: input.callId,
+    tag: `call-${input.callId}`,
+    requireInteraction: true,
+    video: input.video,
+    fromName: input.fromName,
+    conversationId: input.conversationId,
+  });
 }
 
 export async function notifyCallEnded(
@@ -145,18 +136,14 @@ export async function notifyCallEnded(
       : "Chamada perdida"
     : "Chamada encerrada";
 
-  await notifyUsers(
-    ids,
-    {
-      title: missed ? "Chamada perdida" : "Remetum",
-      body,
-      url: `/app?c=${encodeURIComponent(input.conversationId)}`,
-      type: "call-ended",
-      callId: input.callId,
-      tag: `call-${input.callId}`,
-      reason: input.reason,
-      conversationId: input.conversationId,
-    },
-    { evenIfOnline: true },
-  );
+  await notifyUsers(ids, {
+    title: missed ? "Chamada perdida" : "Remetum",
+    body,
+    url: `/app?c=${encodeURIComponent(input.conversationId)}`,
+    type: "call-ended",
+    callId: input.callId,
+    tag: `call-${input.callId}`,
+    reason: input.reason,
+    conversationId: input.conversationId,
+  });
 }

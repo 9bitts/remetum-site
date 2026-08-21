@@ -66,6 +66,9 @@ export interface UpdateProfileInput {
   avatarUrl?: string | null;
   hideLastSeen?: boolean;
   sendReadReceipts?: boolean;
+  notificationPreview?: "full" | "name" | "hidden";
+  notificationSound?: boolean;
+  dndEnabled?: boolean;
 }
 
 export interface StatusItem {

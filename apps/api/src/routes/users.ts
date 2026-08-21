@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { isNotificationPreviewMode } from "@ebano/shared";
 import { prisma } from "../prisma.js";
 import { toAuthUser, toPublicUser } from "../lib/serialize.js";
 import {
@@ -125,6 +126,9 @@ export async function userRoutes(app: FastifyInstance) {
       avatarUrl?: string | null;
       hideLastSeen?: boolean;
       sendReadReceipts?: boolean;
+      notificationPreview?: string;
+      notificationSound?: boolean;
+      dndEnabled?: boolean;
     };
   }>("/users/me", { preHandler: [app.authenticate] }, async (request, reply) => {
     const body = request.body ?? {};
@@ -154,6 +158,13 @@ export async function userRoutes(app: FastifyInstance) {
       }
     }
 
+    if (
+      body.notificationPreview !== undefined &&
+      !isNotificationPreviewMode(body.notificationPreview)
+    ) {
+      return reply.code(400).send({ error: "Prévia de notificação inválida" });
+    }
+
     const user = await prisma.user.update({
       where: { id: request.userId! },
       data: {
@@ -167,6 +178,13 @@ export async function userRoutes(app: FastifyInstance) {
         ...(body.sendReadReceipts !== undefined
           ? { sendReadReceipts: body.sendReadReceipts }
           : {}),
+        ...(body.notificationPreview !== undefined
+          ? { notificationPreview: body.notificationPreview }
+          : {}),
+        ...(body.notificationSound !== undefined
+          ? { notificationSound: body.notificationSound }
+          : {}),
+        ...(body.dndEnabled !== undefined ? { dndEnabled: body.dndEnabled } : {}),
       },
     });
 

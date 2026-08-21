@@ -38,6 +38,21 @@ export type {
   CallEndedEvent,
 } from "./chat.js";
 
+export type {
+  NotificationPreviewMode,
+  PushKind,
+} from "./notifications.js";
+export {
+  MUTE_FOREVER_ISO,
+  MUTE_FOREVER_MINUTES,
+  NOTIFICATION_PREVIEW_MODES,
+  extractMentionedHandles,
+  formatPushCopy,
+  isNotificationPreviewMode,
+  isPermanentMute,
+  previewSnippet,
+} from "./notifications.js";
+
 export type UserStatus = "online" | "offline";
 
 export type ConversationType = "direct" | "group";
@@ -60,6 +75,9 @@ export interface User {
   emailVerifiedAt: string | null;
   hideLastSeen: boolean;
   sendReadReceipts: boolean;
+  notificationPreview: "full" | "name" | "hidden";
+  notificationSound: boolean;
+  dndEnabled: boolean;
   createdAt: string;
 }
 
@@ -221,5 +239,11 @@ export const SOCKET_EVENTS = {
   CALL_HANGUP: "call:hangup",
   CALL_ACCEPTED: "call:accepted",
   CALL_ENDED: "call:ended",
+  STATUS_NEW: "status:new",
   ERROR: "error",
 } as const;
+
+export interface StatusNewEvent {
+  userId: string;
+  userName: string;
+}

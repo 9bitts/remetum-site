@@ -14,7 +14,11 @@ import {
   type MessageUpdatedEvent,
   type ConversationUpdatedEvent,
   type PresenceEvent,
+  type StatusNewEvent,
   type TypingEvent,
+  extractMentionedHandles,
+  formatPushCopy,
+  previewSnippet,
 } from "@ebano/shared";
 import { api, ApiError, refreshSession } from "@/lib/api";
 import { connectSocket, getSocket } from "@/lib/socket";
@@ -26,7 +30,15 @@ import { CommunityView } from "./CommunityView";
 import { SettingsModal } from "./SettingsModal";
 import { GroupInfoModal } from "./GroupInfoModal";
 import { CallOverlay, type CallUiState } from "./CallOverlay";
-import { registerPush, showLocalCallNotification, closeCallNotification } from "@/lib/push";
+import {
+  closeCallNotification,
+  showLocalCallNotification,
+  syncAppBadge,
+  syncPushIfGranted,
+} from "@/lib/push";
+import { playNotificationSound } from "@/lib/notify-sound";
+import { PushPrompt } from "./PushPrompt";
+import { StatusTray } from "./StatusTray";
 import { conversationPeer, conversationTitle } from "@/lib/format";
 import { useStayInAppBack } from "@/lib/back-stack";
 import {
@@ -111,8 +123,19 @@ export function ChatShell() {
   const [failedTempIds, setFailedTempIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [inAppNotice, setInAppNotice] = useState<{
+    conversationId: string | null;
+    title: string;
+    body: string;
+  } | null>(null);
 
   const selectedIdRef = useRef<string | null>(null);
+  const userRef = useRef(user);
+  const conversationsRef = useRef(conversations);
+  const pendingCallRef = useRef<{
+    callId: string;
+    action?: "accept" | "decline";
+  } | null>(null);
   const loadGenRef = useRef(0);
   const deepLinkDone = useRef(false);
   const callStateRef = useRef<CallUiState | null>(null);
@@ -149,6 +172,25 @@ export function ChatShell() {
   useEffect(() => {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
+
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
+
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
+
+  useEffect(() => {
+    const n = conversations.reduce((sum, c) => sum + (c.unreadCount || 0), 0);
+    syncAppBadge(n);
+  }, [conversations]);
+
+  useEffect(() => {
+    if (!inAppNotice) return;
+    const t = window.setTimeout(() => setInAppNotice(null), 5000);
+    return () => window.clearTimeout(t);
+  }, [inAppNotice]);
 
   useEffect(() => {
     callStateRef.current = callState;
@@ -324,8 +366,20 @@ export function ChatShell() {
         try {
           const params = new URLSearchParams(window.location.search);
           const c = params.get("c");
+          const callId = params.get("call");
+          const action = params.get("action");
+          if (params.get("status") === "1") setSidebarTab("chats");
+          if (callId) {
+            pendingCallRef.current = {
+              callId,
+              action:
+                action === "accept" || action === "decline" ? action : undefined,
+            };
+          }
           if (c && list.some((x) => x.id === c)) {
             void selectConversation(c);
+          }
+          if (params.toString()) {
             window.history.replaceState({}, "", "/app");
           }
         } catch {
@@ -339,8 +393,33 @@ export function ChatShell() {
         }
         setBootError(err instanceof Error ? err.message : "Falha ao carregar");
       });
-    void registerPush().catch(() => undefined);
+    void syncPushIfGranted().catch(() => undefined);
   }, [user, refreshConversations, refresh, selectConversation]);
+
+  useEffect(() => {
+    if (!user || !("serviceWorker" in navigator)) return;
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as {
+        type?: string;
+        conversationId?: string;
+        callId?: string;
+        action?: "accept" | "decline";
+        kind?: string;
+      };
+      if (data?.type !== "remetum:notification") return;
+      if (data.kind === "status") setSidebarTab("chats");
+      if (data.callId) {
+        pendingCallRef.current = {
+          callId: data.callId,
+          action: data.action,
+        };
+      }
+      if (data.conversationId) void selectConversation(data.conversationId);
+    };
+    navigator.serviceWorker.addEventListener("message", onMessage);
+    return () =>
+      navigator.serviceWorker.removeEventListener("message", onMessage);
+  }, [user, selectConversation]);
 
   useEffect(() => {
     if (!user) return;
@@ -447,6 +526,44 @@ export function ChatShell() {
             conversationId: msg.conversationId,
             messageIds: [msg.id],
           });
+        }
+      } else if (msg.senderId !== user.id && msg.type !== "call") {
+        const me = userRef.current;
+        if (
+          me &&
+          !me.dndEnabled &&
+          document.visibilityState === "visible"
+        ) {
+          const conv = conversationsRef.current.find(
+            (c) => c.id === msg.conversationId,
+          );
+          const muted = Boolean(
+            conv?.mutedUntil && new Date(conv.mutedUntil) > new Date(),
+          );
+          const mentioned = Boolean(
+            me.handle &&
+              extractMentionedHandles(msg.content ?? "").includes(me.handle),
+          );
+          const replyToMe = msg.replyTo?.senderId === me.id;
+          if (!muted || mentioned || replyToMe) {
+            const senderName =
+              conv?.participants.find((p) => p.id === msg.senderId)?.name ??
+              "Alguém";
+            const copy = formatPushCopy({
+              preview: me.notificationPreview ?? "full",
+              kind: mentioned ? "mention" : replyToMe ? "reply" : "message",
+              conversationType: conv?.type ?? "direct",
+              conversationName: conv?.name ?? null,
+              senderName,
+              snippet: previewSnippet(msg.type, msg.content),
+            });
+            setInAppNotice({
+              conversationId: msg.conversationId,
+              title: copy.title,
+              body: copy.body,
+            });
+            if (me.notificationSound) playNotificationSound();
+          }
         }
       }
     };
@@ -656,6 +773,19 @@ export function ChatShell() {
       inFlightTempIds.current.clear();
     };
 
+    const onStatusNew = (event: StatusNewEvent) => {
+      if (event.userId === user.id) return;
+      const me = userRef.current;
+      if (!me || me.dndEnabled) return;
+      if (document.visibilityState !== "visible") return;
+      setInAppNotice({
+        conversationId: null,
+        title: event.userName,
+        body: "Publicou um status",
+      });
+      if (me.notificationSound) playNotificationSound();
+    };
+
     socket.on("connect", onConnect);
     socket.on("disconnect", onDisconnect);
     if (socket.connected) flushOutboxRef.current();
@@ -669,6 +799,7 @@ export function ChatShell() {
     socket.on(SOCKET_EVENTS.CALL_OFFER, onCallOffer);
     socket.on(SOCKET_EVENTS.CALL_ACCEPTED, onCallAccepted);
     socket.on(SOCKET_EVENTS.CALL_ENDED, onCallEnded);
+    socket.on(SOCKET_EVENTS.STATUS_NEW, onStatusNew);
     socket.on(SOCKET_EVENTS.ERROR, onSocketError);
 
     const onVisibility = () => {
@@ -698,6 +829,7 @@ export function ChatShell() {
       socket.off(SOCKET_EVENTS.CALL_OFFER, onCallOffer);
       socket.off(SOCKET_EVENTS.CALL_ACCEPTED, onCallAccepted);
       socket.off(SOCKET_EVENTS.CALL_ENDED, onCallEnded);
+      socket.off(SOCKET_EVENTS.STATUS_NEW, onStatusNew);
       socket.off(SOCKET_EVENTS.ERROR, onSocketError);
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("online", onOnline);
@@ -943,6 +1075,16 @@ export function ChatShell() {
     clearCall();
   }
 
+  useEffect(() => {
+    if (callState?.phase !== "incoming") return;
+    const pending = pendingCallRef.current;
+    if (!pending || pending.callId !== callState.offer.callId) return;
+    const action = pending.action;
+    pendingCallRef.current = null;
+    if (action === "decline") rejectCall();
+    else if (action === "accept") void acceptCall();
+  }, [callState]);
+
   function cancelCall() {
     if (callState?.phase !== "outgoing") return;
     if (callState.callId) {
@@ -1045,7 +1187,21 @@ export function ChatShell() {
   }
 
   return (
-    <div className="flex h-dvh flex-col overflow-hidden bg-ebano-bg">
+    <div className="relative flex h-dvh flex-col overflow-hidden bg-ebano-bg">
+      {inAppNotice ? (
+        <button
+          type="button"
+          onClick={() => {
+            const id = inAppNotice.conversationId;
+            setInAppNotice(null);
+            if (id) void selectConversation(id);
+          }}
+          className="absolute top-3 left-1/2 z-40 w-[min(92%,24rem)] -translate-x-1/2 rounded-xl border border-white/10 bg-ebano-surface px-3 py-2 text-left shadow-xl"
+        >
+          <p className="truncate text-sm font-medium">{inAppNotice.title}</p>
+          <p className="truncate text-xs text-ebano-muted">{inAppNotice.body}</p>
+        </button>
+      ) : null}
       <div className="flex min-h-0 flex-1 overflow-hidden">
       <aside
         className={`w-full border-r border-white/5 md:w-[380px] md:shrink-0 ${
@@ -1083,6 +1239,7 @@ export function ChatShell() {
             </button>
           </div>
         </div>
+        <PushPrompt visible={conversations.length > 0} />
         <div className="min-h-0 flex-1">
           {sidebarTab === "community" ? (
             <CommunityView
@@ -1096,7 +1253,10 @@ export function ChatShell() {
               }}
             />
           ) : (
-            <ConversationList
+            <div className="flex h-full flex-col">
+              <StatusTray />
+              <div className="min-h-0 flex-1">
+                <ConversationList
               conversations={conversations}
               currentUserId={user.id}
               selectedId={selectedId}
@@ -1108,6 +1268,8 @@ export function ChatShell() {
               onOpenPeople={() => setSidebarTab("community")}
               messageHits={messageHits}
             />
+              </div>
+            </div>
           )}
         </div>
         <nav className="flex shrink-0 border-t border-white/5">

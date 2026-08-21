@@ -251,6 +251,7 @@ export async function toggleReaction(
     },
   });
 
+  let added = false;
   if (existing) {
     await prisma.messageReaction.delete({
       where: {
@@ -258,13 +259,14 @@ export async function toggleReaction(
       },
     });
   } else {
+    added = true;
     await prisma.messageReaction.create({
       data: { messageId, userId, emoji: trimmed },
     });
   }
 
   const full = await loadMessage(messageId);
-  return toMessage(full!, undefined, userId);
+  return { message: toMessage(full!, undefined, userId), added };
 }
 
 export async function markMessagesRead(

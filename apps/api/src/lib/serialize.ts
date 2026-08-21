@@ -7,6 +7,7 @@ import type {
   MessageReactionSummary,
   PublicUser,
 } from "@ebano/shared";
+import { isNotificationPreviewMode } from "@ebano/shared";
 
 export function toAuthUser(user: User): AuthUser {
   return {
@@ -21,6 +22,11 @@ export function toAuthUser(user: User): AuthUser {
     emailVerifiedAt: user.emailVerifiedAt?.toISOString() ?? null,
     hideLastSeen: user.hideLastSeen,
     sendReadReceipts: user.sendReadReceipts,
+    notificationPreview: isNotificationPreviewMode(user.notificationPreview)
+      ? user.notificationPreview
+      : "full",
+    notificationSound: user.notificationSound,
+    dndEnabled: user.dndEnabled,
     createdAt: user.createdAt.toISOString(),
   };
 }

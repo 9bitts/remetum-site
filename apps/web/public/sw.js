@@ -38,6 +38,14 @@ async function hasFocusedClient() {
   return clients.some((c) => c.visibilityState === "visible" && c.focused);
 }
 
+async function markAppBadge() {
+  try {
+    if (self.navigator?.setAppBadge) await self.navigator.setAppBadge();
+  } catch {
+    // ignore
+  }
+}
+
 self.addEventListener("push", (event) => {
   event.waitUntil(
     (async () => {
@@ -54,7 +62,9 @@ self.addEventListener("push", (event) => {
           ? data.tag
           : data.callId
             ? `call-${data.callId}`
-            : undefined;
+            : data.conversationId
+              ? `msg-${data.conversationId}`
+              : undefined;
       const focused = await hasFocusedClient();
 
       if (data.type === "call-ended") {
@@ -62,7 +72,7 @@ self.addEventListener("push", (event) => {
         const missed =
           data.reason === "cancelled" || data.reason === "unavailable";
         if (focused || !missed) {
-          if (!focused) {
+          if (!focused && missed === false) {
             await self.registration.showNotification(data.title || "Remetum", {
               body: data.body || "Chamada encerrada",
               tag,
@@ -75,52 +85,93 @@ self.addEventListener("push", (event) => {
           }
           return;
         }
+        await markAppBadge();
         await self.registration.showNotification("Chamada perdida", {
           body: data.body || "Chamada perdida",
           tag,
           icon: "/icons/icon-192.png",
           badge: "/icons/icon-192.png",
-          data: { url },
+          data: { url, type: "call-ended", conversationId: data.conversationId },
         });
         return;
       }
 
       if (focused) return;
 
-      await self.registration.showNotification(data.title, {
+      await markAppBadge();
+
+      const isCall = data.type === "call";
+      await self.registration.showNotification(data.title || "Remetum", {
         body: data.body,
         icon: "/icons/icon-192.png",
         badge: "/icons/icon-192.png",
         tag,
-        renotify: data.type === "call",
-        requireInteraction: data.type === "call" || Boolean(data.requireInteraction),
-        vibrate:
-          data.type === "call"
-            ? [300, 140, 300, 140, 300, 140, 300]
-            : [120, 80, 120],
+        renotify: true,
+        requireInteraction: isCall || Boolean(data.requireInteraction),
+        vibrate: isCall
+          ? [300, 140, 300, 140, 300, 140, 300]
+          : [120, 80, 120],
+        actions: isCall
+          ? [
+              { action: "accept", title: "Atender" },
+              { action: "decline", title: "Recusar" },
+            ]
+          : [],
         data: {
           url,
           callId: data.callId,
           type: data.type,
+          conversationId: data.conversationId,
+          video: data.video,
+          fromName: data.fromName,
         },
       });
     })(),
   );
 });
 
+async function openFromNotification(url, payload) {
+  const abs = new URL(url, self.location.origin).href;
+  const clients = await self.clients.matchAll({
+    type: "window",
+    includeUncontrolled: true,
+  });
+  const visible = clients.find((c) => c.visibilityState === "visible");
+  const client = visible || clients[0];
+  if (client) {
+    client.postMessage({ type: "remetum:notification", ...payload, url });
+    try {
+      if ("navigate" in client) await client.navigate(url);
+    } catch {
+      // ignore
+    }
+    return client.focus();
+  }
+  if (self.clients.openWindow) return self.clients.openWindow(abs);
+}
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const url = safeAppUrl(event.notification.data?.url);
+  const data = event.notification.data || {};
+  let url = safeAppUrl(data.url);
+  const action = event.action || "";
+  if (data.type === "call" && data.callId) {
+    const next = new URL(url, self.location.origin);
+    if (!next.searchParams.get("call")) {
+      next.searchParams.set("call", data.callId);
+    }
+    if (action === "accept" || action === "decline") {
+      next.searchParams.set("action", action);
+    }
+    url = `${next.pathname}${next.search}`;
+  }
 
   event.waitUntil(
-    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
-      for (const client of clients) {
-        if ("focus" in client) {
-          client.navigate(url);
-          return client.focus();
-        }
-      }
-      if (self.clients.openWindow) return self.clients.openWindow(url);
+    openFromNotification(url, {
+      conversationId: data.conversationId,
+      callId: data.callId,
+      action: action || undefined,
+      kind: data.type,
     }),
   );
 });

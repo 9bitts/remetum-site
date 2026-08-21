@@ -6,6 +6,7 @@ import type {
   Message as SharedMessage,
   ParticipantRole,
 } from "@ebano/shared";
+import { MUTE_FOREVER_ISO, MUTE_FOREVER_MINUTES } from "@ebano/shared";
 import { getIo } from "../sockets/io.js";
 import { assertOwnedMedia } from "./uploads.js";
 
@@ -393,8 +394,6 @@ export async function getConversationSummary(
   return buildSummary(row, userId, mine);
 }
 
-const DEFAULT_MUTE_MINUTES = 365 * 24 * 60;
-
 export async function updateConversationPrefs(
   conversationId: string,
   userId: string,
@@ -422,11 +421,16 @@ export async function updateConversationPrefs(
   }
   if (prefs.muted !== undefined) {
     if (prefs.muted) {
-      const minutes =
-        typeof prefs.muteMinutes === "number" && prefs.muteMinutes > 0
-          ? prefs.muteMinutes
-          : DEFAULT_MUTE_MINUTES;
-      data.mutedUntil = new Date(Date.now() + minutes * 60 * 1000);
+      if (
+        prefs.muteMinutes === MUTE_FOREVER_MINUTES ||
+        typeof prefs.muteMinutes !== "number"
+      ) {
+        data.mutedUntil = new Date(MUTE_FOREVER_ISO);
+      } else if (prefs.muteMinutes > 0) {
+        data.mutedUntil = new Date(Date.now() + prefs.muteMinutes * 60 * 1000);
+      } else {
+        data.mutedUntil = new Date(MUTE_FOREVER_ISO);
+      }
     } else {
       data.mutedUntil = null;
     }
